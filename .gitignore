@@ -1,0 +1,6 @@
+.bloop/
+.metals/
+target/
+project/project/
+project/target/
+.cellar/
