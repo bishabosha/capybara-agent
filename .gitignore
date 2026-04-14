@@ -4,3 +4,6 @@ target/
 project/project/
 project/target/
 .cellar/
+out/
+.bsp/
+out.txt
