@@ -1,6 +1,7 @@
 package capybara.agent
 
 import steps.result.Result
+import steps.result.Result.eval.{ok}
 import sttp.client4.Request
 import sttp.client4.quick.*
 import upickle.default.*
@@ -14,7 +15,7 @@ import scala.concurrent.blocking
 
 object OllamaClient {
 
-  def readSafe[T](line: String)(using r: Reader[T]): Result[T, String] =
+  def readSafe[T](line: ujson.Readable)(using r: Reader[T]): Result[T, String] =
     Result.catchException({
       case err: upickle.core.TraceVisitor.TraceException =>
         err.getCause match
@@ -83,12 +84,12 @@ object OllamaClient {
   }
 
   class ChunkRequest[Chunk](
-      inner: Request[Result[Boolean, String]],
+      inner: Request[Result[Unit, String]],
       output: ChunkOutput[Chunk]
   ):
     def send(
         listeners: ChunkOutput.ChunkReader[Chunk]*
-    )(using ExecutionContext): Future[Result[Boolean, String]] =
+    )(using ExecutionContext): Future[Result[Unit, String]] =
       if output.isRunning then
         Future {
           blocking {
@@ -98,25 +99,93 @@ object OllamaClient {
         }
       else Future.failed(new java.io.IOException("output already done"))
 
-  def request[Chunk](
+  enum Chunk[+T] {
+    case Content(content: String)
+    case Thinking(thinking: String)
+    case Tools(toolCalls: Vector[ToolCall[T]])
+  }
+
+  final case class ToolCall[+T](
+      name: String,
+      arguments: T
+  )
+
+  def parseArguments[T](
+      name: String,
+      arguments: ujson.Value,
+      lookup: Map[String, ReadWriter[T]]
+  ): Result[T, String] =
+    lookup.get(name) match
+      case Some(given ReadWriter[t]) => readSafe[t](arguments)
+      case None                      => Result.Err("unknown tool name")
+
+  def chunkParser[T](
+      line: String,
+      tools: Map[String, ReadWriter[T]]
+  ): Result[(message: Chunk[T], done: Boolean), String] =
+    val messageState = readSafe[(message: ujson.Value, done: Boolean)](line)
+    def thinkingState(msg: ujson.Value) = readSafe[(thinking: String)](msg).tap(thinking =>
+      require(thinking.thinking.nonEmpty, "unexpected empty thinking")
+    )
+    def contentState(msg: ujson.Value) = readSafe[(content: String)](msg)
+    def toolState(msg: ujson.Value) =
+      readSafe[(tool_calls: Vector[(function: ujson.Value)])](msg).tap(calls =>
+        require(calls.tool_calls.nonEmpty, "unexpected empty tool calls")
+      )
+    def toolCallState(toolCall: ujson.Value): Result[ToolCall[T], String] =
+      for
+        name <- readSafe[(name: String)](toolCall)
+        arguments <- readSafe[(arguments: ujson.Value)](toolCall)
+        parsed <- parseArguments(name.name, arguments.arguments, tools)
+      yield ToolCall(name.name, parsed)
+    for
+      msg <- messageState
+      content <- contentState(msg.message)
+      message <- locally {
+        (thinkingState(msg.message), toolState(msg.message)) match
+          case (Result.Ok((thinking = t)), Result.Ok((tool_calls = calls))) =>
+            Result.Err(s"unexpected thinking and tool_calls!")
+          case (Result.Ok((thinking = t)), _) =>
+            if content.content.nonEmpty then Result.Err(s"unexpected thinking and content!")
+            else Result.Ok(Chunk.Thinking(t))
+          case (_, Result.Ok((tool_calls = calls))) =>
+            if content.content.nonEmpty then Result.Err(s"unexpected tool_calls and content!")
+            else Result(Chunk.Tools(calls.map(call => toolCallState(call.function).ok)))
+          case _ => Result.Ok(Chunk.Content(content.content))
+      }
+    yield (message, msg.done)
+
+  def request[T](
       model: String,
+      system: String,
       query: String,
-      parser: String => Result[(message: Chunk, done: Boolean), String]
-  ): ChunkRequest[Chunk] = {
-    val output = new ChunkOutput[Chunk]()
+      tools: Vector[
+        (`type`: String, function: (name: String, parameters: ujson.Value, description: String))
+      ],
+      toolParsers: Map[String, ReadWriter[T]]
+  ): ChunkRequest[Chunk[T]] = {
+    val output = new ChunkOutput[Chunk[T]]()
+    val bodyObj = {
+      (
+        model = model,
+        messages = Seq(
+          (
+            role = "system",
+            content = system
+          ),
+          (
+            role = "user",
+            content = query
+          )
+        ),
+        tools = tools
+      )
+    }
     val req = quickRequest
       .post(uri"http://localhost:11434/api/chat")
       .body(
         write(
-          (
-            model = model,
-            messages = Seq(
-              (
-                role = "user",
-                content = query
-              )
-            )
-          )
+          bodyObj
         )
       )
       .response(
@@ -125,33 +194,34 @@ object OllamaClient {
             val isr =
               m(new java.io.InputStreamReader(is, StandardCharsets.UTF_8))
             val reader = m(new java.io.BufferedReader(isr))
-            var done = false
+            var completed = false
             var line: String | Null = null
             while
               line = reader.readLine()
-              !done && line != null
+              !completed && line != null
             do
-              done = parser(line) match
+              val parsed = chunkParser(line, toolParsers)
+              parsed match
                 case Result.Ok((chunk, d)) =>
                   output.push(chunk)
                   if d then output.close()
-                  d
+                  completed = d
                 case Result.Err(error) =>
                   output.fail(s"while reading response chunk: $error")
-                  true
-            done
+                  completed = true
+            if !completed then output.fail("unexpected end of stream")
           } match {
-            case scala.util.Success(done) => done
-            case scala.util.Failure(e)    =>
+            case scala.util.Success(_) =>
+              ()
+            case scala.util.Failure(e) =>
               output.fail(s"from exception: $e")
-              false
           }
         }).map({
           case Left(err) =>
             readSafe[(error: String)](err).match
               case Result.Ok(msg)    => Result.Err(s"request failed: ${msg.error}")
               case Result.Err(error) => Result.Err(s"could not parse request failure: $error")
-          case Right(done) => Result.Ok(done)
+          case Right(_) => Result.Ok(())
         })
       )
     ChunkRequest(req, output)

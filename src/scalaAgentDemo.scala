@@ -15,7 +15,7 @@ def main(query: Option[String]) =
       Terminal.run(runSession)
 
 def runSession(query: String)(using Logger): Future[Unit] =
-  for res <- Qwen3_5.singleRequest(query, summon[Logger]) yield {
+  for res <- ScalaAgent.singleRequest(query, summon[Logger]) yield {
     res match
       case Result.Ok(_)      => // ignore for now
       case Result.Err(error) =>
