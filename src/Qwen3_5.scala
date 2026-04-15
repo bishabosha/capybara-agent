@@ -7,47 +7,55 @@ import upickle.implicits.namedTuples.default.given
 
 import scala.concurrent.{ExecutionContext, Promise}
 import scala.jdk.CollectionConverters.given
+import scala.concurrent.Future
+import steps.result.Result
+import capybara.agent.OllamaClient.ChunkOutputState
+import capybara.agent.OllamaClient.ChunkFinalState
+import capybara.agent.OllamaClient.readSafe
 
 object Qwen3_5 {
-  type Chunk = (content: String, thinking: String)
+  enum Chunk {
+    case Content(content: String)
+    case Thinking(thinking: String)
+  }
 
-  def qwen3_5(line: String): Option[(Chunk, Boolean)] =
-    scala.util
-      .Try(
-        read[
+  def qwen3_5(line: String): Result[(message: Chunk, done: Boolean), String] =
+    readSafe[
+      (
+          message: (thinking: String),
+          done: Boolean
+      )
+    ](line)
+      .map(c =>
+        (
+          message = Chunk.Thinking(thinking = c.message.thinking),
+          done = c.done
+        )
+      )
+      .or(
+        readSafe[
           (
-              message: (content: String, thinking: String),
+              message: (content: String),
               done: Boolean
           )
         ](line)
-      )
-      .orElse(
-        scala.util
-          .Try(
-            read[
-              (
-                  message: (content: String),
-                  done: Boolean
-              )
-            ](line)
-          )
           .map(c =>
             (
-              message = (content = c.message.content, thinking = ""),
+              message = Chunk.Content(content = c.message.content),
               done = c.done
             )
           )
       )
-      .map(chunk => (chunk.message -> chunk.done))
-      .toOption
 
-  def singleRequest(query: String, log: Logger)(using ExecutionContext) = {
+  def singleRequest(query: String, log: Logger)(using
+      ExecutionContext
+  ): Future[Result[Seq[Chunk], String]] = {
     val request = OllamaClient.request(
       model = "qwen3.5:35b-a3b-coding-nvfp4",
       query,
       qwen3_5
     )
-    val chunks = Promise[Either[Exception, Seq[Chunk]]]()
+    val chunks = Promise[Result[Seq[Chunk], String]]()
     val chunker = new ChunkOutput.ChunkReader[Chunk]() {
       private val collected =
         new java.util.concurrent.ConcurrentLinkedDeque[Chunk]()
@@ -58,21 +66,27 @@ object Qwen3_5 {
 
       override def onChunk(chunk: Chunk): Unit =
         seenAny.set(true)
-        if chunk.thinking.isEmpty then {
-          if seenContent.compareAndSet(false, true) then log.print("\n-----\n")
-          log.print(Console.BOLD + chunk.content + Console.RESET)
-        } else {
-          log.print(Console.CYAN + chunk.thinking + Console.RESET)
+        chunk match {
+          case Chunk.Content(content) =>
+            if seenContent.compareAndSet(false, true) then log.print("\n-----\n")
+            log.print(Console.BOLD + content + Console.RESET)
+          case Chunk.Thinking(thinking) =>
+            log.print(Console.CYAN + thinking + Console.RESET)
         }
         collected.add(chunk)
 
-      override def onComplete(didFail: Boolean): Unit =
+      override def onComplete(finalState: ChunkOutputState & ChunkFinalState): Unit =
         if seenAny.get() then log.print("\n")
-        if !didFail then chunks.success(Right(collected.asScala.toVector))
-        else chunks.success(Left(new Exception("Failed")))
+        chunks.success(
+          finalState match
+            case ChunkOutputState.Done       => Result.Ok(collected.asScala.toVector)
+            case ChunkOutputState.Error(msg) => Result.Err(msg)
+        )
     }
-    val _ = request.send(chunker)
-    chunks.future
+    request.send(chunker).flatMap {
+      case Result.Ok(_)       => chunks.future
+      case err: Result.Err[?] => Future.successful(err)
+    }
   }
 
 }

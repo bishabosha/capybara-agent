@@ -1,5 +1,7 @@
 package capybara.agent
 
+import steps.result.Result
+import sttp.client4.Request
 import sttp.client4.quick.*
 import upickle.default.*
 import upickle.implicits.namedTuples.default.given
@@ -9,20 +11,41 @@ import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.blocking
-import sttp.client4.Request
 
 object OllamaClient {
 
+  def readSafe[T](line: String)(using r: Reader[T]): Result[T, String] =
+    Result.catchException({
+      case err: upickle.core.TraceVisitor.TraceException =>
+        err.getCause match
+          case cause: Throwable => s"at ${err.jsonPath}: ${cause.getMessage()}"
+          case null             => s"at ${err.jsonPath}"
+      case err =>
+        s"from exception: ${err}"
+    })(upickle.default.read[T](line))
+
+  sealed trait ChunkFinalState { self: ChunkOutputState => }
+
   enum ChunkOutputState {
-    case Done
-    case Error
+    case Done extends ChunkOutputState, ChunkFinalState
+    case Error(msg: String) extends ChunkOutputState, ChunkFinalState
     case Running
     case Append
+
+    def isError: Boolean = this match {
+      case Error(_) => true
+      case _        => false
+    }
+
+    def isDone: Boolean = this match {
+      case Done => true
+      case _    => false
+    }
   }
 
   object ChunkOutput {
     abstract class ChunkReader[Chunk]() {
-      def onComplete(didFail: Boolean): Unit
+      def onComplete(finalState: ChunkOutputState & ChunkFinalState): Unit
       def onChunk(chunk: Chunk): Unit
     }
   }
@@ -36,19 +59,22 @@ object OllamaClient {
         listener: ChunkOutput.ChunkReader[Chunk]
     ) =
       listeners.updateAndGet(listener :: _)
-    def failed(): Boolean = state.get() == ChunkOutputState.Error
+    def isRunning: Boolean = {
+      val curr = state.get()
+      !(curr.isDone || curr.isError)
+    }
+    def failed(): Boolean = state.get().isError
     def close() =
       if state.compareAndSet(ChunkOutputState.Running, ChunkOutputState.Done)
-      then listeners.get().foreach(_.onComplete(didFail = false))
+      then listeners.get().foreach(_.onComplete(ChunkOutputState.Done))
       else throw new IllegalStateException("close called while not running")
-    def fail() =
-      if state.compareAndSet(ChunkOutputState.Running, ChunkOutputState.Error)
-      then listeners.get().foreach(_.onComplete(true))
+    def fail(message: String) =
+      val errorState = ChunkOutputState.Error(message)
+      if state.compareAndSet(ChunkOutputState.Running, errorState)
+      then listeners.get().foreach(_.onComplete(errorState))
       else throw new IllegalStateException("fail called while not running")
     def push(chunk: Chunk) =
-      if (
-        state.compareAndSet(ChunkOutputState.Running, ChunkOutputState.Append)
-      ) {
+      if (state.compareAndSet(ChunkOutputState.Running, ChunkOutputState.Append)) {
         listeners.get().foreach(_.onChunk(chunk))
         state.set(ChunkOutputState.Running)
       } else {
@@ -57,25 +83,25 @@ object OllamaClient {
   }
 
   class ChunkRequest[Chunk](
-      inner: Request[Either[String, Boolean]],
+      inner: Request[Result[Boolean, String]],
       output: ChunkOutput[Chunk]
   ):
     def send(
         listeners: ChunkOutput.ChunkReader[Chunk]*
-    )(using ExecutionContext): Future[Boolean] = Future {
-      blocking {
-        listeners.foreach(output.registerListener)
-        val r = inner.send()
-        r.body match
-          case Right(res) => Future.successful(res)
-          case Left(e)    => Future.failed(new java.io.IOException(e))
-      }
-    }.flatten
+    )(using ExecutionContext): Future[Result[Boolean, String]] =
+      if output.isRunning then
+        Future {
+          blocking {
+            listeners.foreach(output.registerListener)
+            inner.send().body
+          }
+        }
+      else Future.failed(new java.io.IOException("output already done"))
 
   def request[Chunk](
       model: String,
       query: String,
-      parser: String => Option[(Chunk, Boolean)]
+      parser: String => Result[(message: Chunk, done: Boolean), String]
   ): ChunkRequest[Chunk] = {
     val output = new ChunkOutput[Chunk]()
     val req = quickRequest
@@ -103,23 +129,29 @@ object OllamaClient {
             var line: String | Null = null
             while
               line = reader.readLine()
-              line != null
+              !done && line != null
             do
               done = parser(line) match
-                case Some((chunk, d)) =>
+                case Result.Ok((chunk, d)) =>
                   output.push(chunk)
                   if d then output.close()
                   d
-                case None =>
-                  output.fail()
+                case Result.Err(error) =>
+                  output.fail(s"while reading response chunk: $error")
                   true
             done
           } match {
             case scala.util.Success(done) => done
             case scala.util.Failure(e)    =>
-              output.fail()
+              output.fail(s"from exception: $e")
               false
           }
+        }).map({
+          case Left(err) =>
+            readSafe[(error: String)](err).match
+              case Result.Ok(msg)    => Result.Err(s"request failed: ${msg.error}")
+              case Result.Err(error) => Result.Err(s"could not parse request failure: $error")
+          case Right(done) => Result.Ok(done)
         })
       )
     ChunkRequest(req, output)
