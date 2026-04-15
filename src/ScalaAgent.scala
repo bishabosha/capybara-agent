@@ -18,12 +18,12 @@ import OllamaClient.ChunkOutput
 object ScalaAgent {
 
   val InterfaceLib = """
+    |package agentlib
     |trait Path
     |trait Interface {
     |  def currentDir(): Path
     |  def listFiles(path: Path): Seq[Path]
     |}
-    |object Interface extends Interface
     """.stripMargin
 
   val SystemPrompt = s"""You are a helpful agent that can perform actions on behalf of the user.
@@ -45,6 +45,7 @@ object ScalaAgent {
     |- and the following safe library methods:
     |```scala
     |$InterfaceLib
+    |object Interface extends Interface
     |```
     |
     |Additionally, mutable collections and reflection are forbidden.
@@ -114,10 +115,12 @@ object ScalaAgent {
             case ChunkOutputState.Error(msg) => Result.Err(msg)
         )
     }
-    request.send(chunker).flatMap {
-      case Result.Ok(_)       => chunks.future
-      case err: Result.Err[?] => Future.successful(err)
-    }
+    Future { scala.concurrent.blocking(ReplExec.compileSigs(InterfaceLib)) }.flatMap(_ =>
+      request.send(chunker).flatMap {
+        case Result.Ok(_)       => chunks.future
+        case err: Result.Err[?] => Future.successful(err)
+      }
+    )
   }
 
 }

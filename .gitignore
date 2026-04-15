@@ -7,3 +7,4 @@ project/target/
 out/
 .bsp/
 out.txt
+**/.agent-runtime/

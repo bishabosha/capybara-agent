@@ -1,5 +1,5 @@
 extends: ScalaModule
-scalaVersion: 3.8.2
+scalaVersion: 3.8.3
 scalacOptions:
   - -Wunused:imports
 mvnDeps:
@@ -9,3 +9,5 @@ mvnDeps:
   - com.lihaoyi::upickle-jsonschema:4.4.3
   - org.jline:jline:3.30.0
   - ch.epfl.lamp::steps:0.2.0
+  - org.scala-lang::scala3-repl:3.8.3
+  - com.lihaoyi::os-lib:0.11.8
