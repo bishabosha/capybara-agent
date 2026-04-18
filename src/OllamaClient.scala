@@ -12,8 +12,30 @@ import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.blocking
+import upickle.jsonschema.JsonSchema
+import scala.deriving.Mirror
 
 object OllamaClient {
+
+  inline def toolsDef[T: {ReadWriter, Mirror.Of}](name: String, description: String) =
+    given JsonSchema[T] = JsonSchema.derived[T]
+    val schema = upickle.jsonschema.schema(upickle.default)[T]
+    val schemaArg = schema("$defs").obj.head(1)
+    (
+      tools = Vector(
+        (
+          `type` = "function",
+          function = (
+            name = name,
+            parameters = schemaArg,
+            description = description
+          )
+        )
+      ),
+      toolParsers = Map(
+        name -> upickle.default.readwriter[T]
+      )
+    )
 
   def readSafe[T](line: ujson.Readable)(using r: Reader[T]): Result[T, String] =
     Result.catchException({
@@ -207,7 +229,7 @@ object OllamaClient {
                   if d then output.close()
                   completed = d
                 case Result.Err(error) =>
-                  output.fail(s"while reading response chunk: $error")
+                  output.fail(s"while reading response chunk: $error\n[debug]: $line")
                   completed = true
             if !completed then output.fail("unexpected end of stream")
           } match {

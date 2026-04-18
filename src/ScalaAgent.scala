@@ -17,14 +17,26 @@ import OllamaClient.ChunkOutput
 
 object ScalaAgent {
 
-  val InterfaceLib = """
-    |package agentlib
+  val Libraries = Seq("filesystem" -> """
+    |package fs
     |trait Path
-    |trait Interface {
+    |trait Universe {
     |  def currentDir(): Path
     |  def listFiles(path: Path): Seq[Path]
     |}
-    """.stripMargin
+    """.stripMargin)
+
+  def renderLibs(libs: Iterable[(String, String)]): String = {
+    libs
+      .map { case (name, code) =>
+        s"""#### $name
+        |```scala
+        |$code
+        |```
+        |""".stripMargin
+      }
+      .mkString("(", ", ", ")")
+  }
 
   val SystemPrompt = s"""You are a helpful agent that can perform actions on behalf of the user.
     |## TOOL CALLING:
@@ -42,39 +54,43 @@ object ScalaAgent {
     |- java.lang.String
     |- scala.Option
     |- scala.math package
-    |- and the following safe library methods:
-    |```scala
-    |$InterfaceLib
-    |object Interface extends Interface
-    |```
+    |- Additionally, mutable collections and reflection are forbidden.
+    |- and additionally you must supply the "universe" parameter. Each universe makes available additional API.
+    |- `scala_code` argument should be concise and without unnecessary boilerplate.
+    |- Assume that the result will be formatted automatically, no need to print it.
+    |- in each universe, assume that code snippets will already have neccessary imports, as they have the following
+    |  boilerplate prepended:
+    |  ```scala
+    |  object Universe extends Universe
+    |  import Universe.*
+    |  ```
     |
-    |Additionally, mutable collections and reflection are forbidden.
+    |### available universes
+    |
+    |${renderLibs(Libraries)}
     |""".stripMargin
 
   def singleRequest(query: String, log: Logger)(using
       ExecutionContext
-  ): Future[Result[Seq[Chunk[(scala_code: String)]], String]] = {
+  ): Future[Result[Seq[Chunk[(universe: String, scala_code: String)]], String]] = {
+    val tool = OllamaClient.toolsDef[(universe: String, scala_code: String)](
+      "run_scala_code",
+      "Execute a Scala expression. The result will be returned formatted as a human-readable string"
+    )
     val request = OllamaClient.request(
-      model = "qwen3.5:35b-a3b-coding-nvfp4",
+      // model = "qwen3.5:35b-a3b-coding-nvfp4",
+      model = "qwen3.6:35b-a3b-coding-nvfp4",
       system = SystemPrompt,
       query,
-      tools = Vector(
-        (
-          `type` = "function",
-          function = (
-            name = "run_scala_code",
-            parameters = upickle.default.schema[(scala_code: String)],
-            description =
-              "Execute a Scala expression. The result will be returned formatted as a human-readable string"
-          )
-        )
-      ),
-      toolParsers = Map("run_scala_code" -> upickle.default.readwriter[(scala_code: String)])
+      tools = tool.tools,
+      toolParsers = tool.toolParsers
     )
-    val chunks = Promise[Result[Seq[Chunk[(scala_code: String)]], String]]()
-    val chunker = new ChunkOutput.ChunkReader[Chunk[(scala_code: String)]]() {
+    val chunks = Promise[Result[Seq[Chunk[(universe: String, scala_code: String)]], String]]()
+    val chunker = new ChunkOutput.ChunkReader[Chunk[(universe: String, scala_code: String)]]() {
       private val collected =
-        new java.util.concurrent.ConcurrentLinkedDeque[Chunk[(scala_code: String)]]()
+        new java.util.concurrent.ConcurrentLinkedDeque[Chunk[
+          (universe: String, scala_code: String)
+        ]]()
       private var seenContent =
         new java.util.concurrent.atomic.AtomicBoolean(false)
       private var seenTools =
@@ -87,7 +103,7 @@ object ScalaAgent {
       private def checkThinkingDone(): Unit =
         if thinkingDone.compareAndSet(false, true) then log.print("\n")
 
-      override def onChunk(chunk: Chunk[(scala_code: String)]): Unit =
+      override def onChunk(chunk: Chunk[(universe: String, scala_code: String)]): Unit =
         seenAny.set(true)
         chunk match {
           case Chunk.Content(content) =>
@@ -100,10 +116,14 @@ object ScalaAgent {
             checkThinkingDone()
             if seenTools.compareAndSet(false, true) then log.print("-----\n")
             for scalaCode <- tool_calls do
-              log.print(Console.YELLOW + scalaCode.name + ":" + Console.RESET + "\n")
-              log.print(Console.YELLOW + "```scala" + Console.RESET + "\n")
-              log.print(Console.YELLOW + scalaCode.arguments.scala_code + Console.RESET)
-              log.print("\n" + Console.YELLOW + "```" + Console.RESET + "\n")
+              log.print(
+                s"${Console.YELLOW}${scalaCode.name}[${scalaCode.arguments.universe}]:${Console.RESET}\n"
+              )
+              log.print(
+                s"${Console.YELLOW}```scala${Console.RESET}\n"
+              )
+              log.print(s"${Console.YELLOW}${scalaCode.arguments.scala_code}${Console.RESET}")
+              log.print(s"\n${Console.YELLOW}```${Console.RESET}\n")
         }
         collected.add(chunk)
 
@@ -115,12 +135,16 @@ object ScalaAgent {
             case ChunkOutputState.Error(msg) => Result.Err(msg)
         )
     }
-    Future { scala.concurrent.blocking(ReplExec.compileSigs(InterfaceLib)) }.flatMap(_ =>
-      request.send(chunker).flatMap {
-        case Result.Ok(_)       => chunks.future
-        case err: Result.Err[?] => Future.successful(err)
-      }
-    )
+    request.send(chunker).flatMap {
+      case Result.Ok(_)       => chunks.future
+      case err: Result.Err[?] => Future.successful(err)
+    }
+    // Future { scala.concurrent.blocking(ReplExec.compileSigs(InterfaceLib)) }.flatMap(_ =>
+    //   request.send(chunker).flatMap {
+    //     case Result.Ok(_)       => chunks.future
+    //     case err: Result.Err[?] => Future.successful(err)
+    //   }
+    // )
   }
 
 }
