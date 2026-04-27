@@ -127,6 +127,12 @@ object OllamaClient {
     case Tools(toolCalls: Vector[ToolCall[T]])
   }
 
+  enum ResolvedChunk[+T, +R] {
+    case Content(content: String) extends ResolvedChunk[Nothing, Nothing]
+    case Thinking(thinking: String) extends ResolvedChunk[Nothing, Nothing]
+    case Tools(toolCalls: Vector[(ToolCall[T], R)]) extends ResolvedChunk[T, R]
+  }
+
   final case class ToolCall[+T](
       name: String,
       arguments: T

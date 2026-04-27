@@ -15,6 +15,7 @@ import scala.concurrent.Promise
 import scala.jdk.CollectionConverters.given
 
 import OllamaClient.ChunkOutput
+import capybara.agent.OllamaClient.ResolvedChunk
 
 object ScalaAgent {
 
@@ -42,7 +43,9 @@ object ScalaAgent {
 
   def singleRequest(query: String, log: Logger)(using
       ExecutionContext
-  ): Future[Result[Seq[Chunk[(universe: String, scala_code: String)]], String]] = {
+  ): Future[Result[Seq[
+    ResolvedChunk[(universe: String, scala_code: String), Result[String, String]]
+  ], String]] = {
     val tool = OllamaClient.toolsDef[(universe: String, scala_code: String)](
       "run_scala_code",
       """Execute a Scala expression.
@@ -61,12 +64,27 @@ object ScalaAgent {
       tools = tool.tools,
       toolParsers = tool.toolParsers
     )
-    val chunks = Promise[Result[Seq[Chunk[(universe: String, scala_code: String)]], String]]()
+    val chunks = Promise[
+      (
+          collected: Result[Seq[
+            (Int, Chunk[(universe: String, scala_code: String)])
+          ], String],
+          scalaCommands: Map[Int, Promise[Result[String, String]]]
+      )
+    ]()
     val chunker = new ChunkOutput.ChunkReader[Chunk[(universe: String, scala_code: String)]]() {
       private val collected =
-        new java.util.concurrent.ConcurrentLinkedDeque[Chunk[
-          (universe: String, scala_code: String)
-        ]]()
+        new java.util.concurrent.ConcurrentLinkedDeque[
+          (
+              Int,
+              Chunk[
+                (universe: String, scala_code: String)
+              ]
+          )
+        ]()
+      private val commandCounter = new java.util.concurrent.atomic.AtomicInteger(0)
+      private val scalaCommands =
+        new java.util.concurrent.ConcurrentHashMap[Int, Promise[Result[String, String]]]()
       private var seenContent =
         new java.util.concurrent.atomic.AtomicBoolean(false)
       private var seenTools =
@@ -81,6 +99,7 @@ object ScalaAgent {
 
       override def onChunk(chunk: Chunk[(universe: String, scala_code: String)]): Unit =
         seenAny.set(true)
+        var chunkId = -1
         chunk match {
           case Chunk.Content(content) =>
             checkThinkingDone()
@@ -91,7 +110,40 @@ object ScalaAgent {
           case Chunk.Tools(tool_calls) =>
             checkThinkingDone()
             if seenTools.compareAndSet(false, true) then log.print("-----\n")
+            chunkId =
+              // later we retrieve based on the offset from the first tool call
+              commandCounter.get() + 1
             for scalaCode <- tool_calls do
+              // todo: extract tool call id from llm?
+              val promise = Promise[Result[String, String]]()
+              val callId = commandCounter.incrementAndGet()
+              scalaCommands.put(callId, promise)
+              promise.tryCompleteWith {
+                Future {
+                  scala.concurrent.blocking {
+                    skills.find(_.universe == scalaCode.arguments.universe) match
+                      case Some(skill) =>
+                        ReplExec.runCode(skill, scalaCode.arguments.scala_code)
+                      case None =>
+                        Result.Err(s"Universe ${scalaCode.arguments.universe} not found")
+                  }
+                }
+              }
+              promise.future.onComplete({ case res =>
+                if res.isFailure then
+                  log.print(
+                    s"${Console.RED}Error executing code chunk [$callId]: ${res.failed.get.getMessage}${Console.RESET}\n"
+                  )
+                else
+                  val resultStr = res.getOrElse(Result.Err("No response")) match {
+                    case Result.Ok(value)  => value
+                    case Result.Err(error) => s"Error: $error"
+                  }
+                  val strippedAnsi = resultStr.replaceAll("\u001B\\[[;\\d]*m", "")
+                  log.print(
+                    s"${Console.GREEN}Result for code chunk [$callId]:\n```\n${strippedAnsi}\n```${Console.RESET}\n"
+                  )
+              })
               log.print(
                 s"${Console.YELLOW}${scalaCode.name}[${scalaCode.arguments.universe}]:${Console.RESET}\n"
               )
@@ -101,14 +153,15 @@ object ScalaAgent {
               log.print(s"${Console.YELLOW}${scalaCode.arguments.scala_code}${Console.RESET}")
               log.print(s"\n${Console.YELLOW}```${Console.RESET}\n")
         }
-        collected.add(chunk)
+        collected.add((chunkId, chunk))
 
       override def onComplete(finalState: ChunkOutputState & ChunkFinalState): Unit =
         if seenAny.get() then log.print("\n")
         chunks.success(
           finalState match
-            case ChunkOutputState.Done       => Result.Ok(collected.asScala.toVector)
-            case ChunkOutputState.Error(msg) => Result.Err(msg)
+            case ChunkOutputState.Done =>
+              (Result.Ok(collected.asScala.toVector), scalaCommands.asScala.toMap)
+            case ChunkOutputState.Error(msg) => (Result.Err(msg), scalaCommands.asScala.toMap)
         )
     }
     Future
@@ -117,7 +170,23 @@ object ScalaAgent {
       )
       .flatMap(_ =>
         request.send(chunker).flatMap {
-          case Result.Ok(_)       => chunks.future
+          case Result.Ok(_) =>
+            for
+              cs <- chunks.future
+              results <- Future.sequence(cs.scalaCommands.map((k, p) => p.future.map(r => (k, r))))
+            yield cs.collected.map({ ress =>
+              ress.map({ (id, chunk) =>
+                chunk match
+                  case Chunk.Content(content)   => ResolvedChunk.Content(content)
+                  case Chunk.Thinking(thinking) => ResolvedChunk.Thinking(thinking)
+                  case Chunk.Tools(tool_calls)  =>
+                    ResolvedChunk.Tools(
+                      tool_calls.zipWithIndex.map { case (tc, idx) =>
+                        (tc, results.toMap.getOrElse(id + idx, Result.Err("No response")))
+                      }.toVector
+                    )
+              })
+            })
           case err: Result.Err[?] => Future.successful(err)
         }
       )

@@ -79,7 +79,7 @@ object Skills {
         |```scala
         |${skill.interface}
         |```
-        |before your code is executed, the following preable is inserted beforehand:
+        |before your code is executed, the following preable is inserted beforehand (DO NOT REPEAT THIS IN YOUR CODE):
         |```scala
         |${skill.api}
         |```
