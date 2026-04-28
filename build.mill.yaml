@@ -12,8 +12,8 @@ mvnDeps:
   - com.lihaoyi::upickle-implicits-named-tuples:4.4.3
   - com.lihaoyi::upickle-jsonschema:4.4.3
   - org.jline:jline:3.30.0
-  - ch.epfl.lamp::steps:0.2.0
+  - ch.epfl.lamp::steps:0.2.1
   - org.scala-lang::scala3-repl:3.8.3
   - com.lihaoyi::os-lib:0.11.8
-  - io.github.bishabosha::scala-object-notation:0.2.1
+  - io.github.bishabosha::scala-object-notation:0.2.2-RC1
   - org.virtuslab::scala-yaml:0.3.1

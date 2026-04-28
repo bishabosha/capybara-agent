@@ -6,12 +6,18 @@ import java.net.URLClassLoader
 import java.nio.file.Paths
 import java.io.PrintStream
 import dotty.tools.repl.State
-import steps.result.Result
+import steps.result.Result, Result.eval.{raise, ok, check}
+import steps.result.Result.apply as result
+import steps.result.Result.task as task
 import dotty.tools.dotc.reporting.Diagnostic
+import scala.util.boundary.Label
 
 object ReplExec {
+  type ResultBody[+T, +E] = Label[Result.Err[E]] ?=> T
 
-  object ScalaClassLoader
+  private object lock
+
+  private object ScalaClassLoader
       extends java.net.URLClassLoader(
         {
           sys
@@ -27,7 +33,7 @@ object ReplExec {
       )
 
   /** For now - no plans to cross-universe classpaths */
-  class Session(ps: PrintStream)
+  private class Session(ps: PrintStream)
       extends ReplDriver(
         settings = Array(
           "-classpath",
@@ -47,33 +53,93 @@ object ReplExec {
       state = run(code)
 
     def renderMessage(message: Diagnostic): String =
-      s"at ${message.pos.line + 1}:${message.pos.column + 1}: ${message.msg}"
+      val msg = embedString(message.msg.toString)
+      s"""- at ${message.pos.line + 1}:${message.pos.column + 1}: $msg
+        |""".stripMargin
 
-    def runExpression(skill: Skill, scalaCode: String): Result[String, String] =
-      val resolvedLib = os.pwd / ".agent-runtime" / "interface" / skill.universe / "impl.jar"
-      if os.exists(resolvedLib) then
-        runWithState(s":jar $resolvedLib")
-        runWithState(s"""def __the_code__ = {
-          |${skill.predef}
-          |$scalaCode
-          |}""".stripMargin)
-        val preamble = MyBufferedOutputStream.flushBuffer()
-        runWithState("__the_code__")
-        val result = MyBufferedOutputStream.flushBuffer()
-        val ret =
-          if state.context.reporter.hasErrors then
-            Result.Err(
-              state.context.reporter.allErrors.map(renderMessage).mkString("\n") + "\n" + preamble
-            )
-          else Result.Ok(result) // todo: handle preamble if error in compilation, etc
-        runWithState(":reset")
-        ret
-      else Result.Err(s"Universe ${skill.universe} not found")
+    def step(command: String, label: String): Result[String, String] = result {
+      runWithState(command)
+      val output = ReplOutputStream.flushBuffer()
+      if state.context.reporter.hasErrors then raise(s"""${embedString(label)}
+          |
+          |Errors summarized:
+          |${embedString(state.context.reporter.allErrors.map(renderMessage).mkString("\n"))}
+          |
+          |REPL output:
+          |```scala
+          |${embedString(output)}
+          |```
+          |""".stripMargin)
+      else output
+    }
+
+    def embedString(str: String) = str.linesIterator.mkString("\n|")
+
+    def loadJar(skill: Skill): Result[Unit, String] = task {
+      val jarRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "impl.jar"
+      val jarPath = os.pwd / jarRelPath
+      runWithState(s":jar $jarPath")
+      val jarOutput = ReplOutputStream.flushBuffer()
+      val cpError: PartialFunction[String, Unit] = { case s"""Cannot add "$_" to classpath.""" => }
+      if jarOutput.linesIterator.collectFirst(cpError).isDefined then
+        raise(
+          s"""Failed to load implementation JAR for universe `${skill.universe}` at path: $jarRelPath
+            |This is an issue with the Skill definition or with the agent's ability to write to the filesystem.
+            |Please check that the skill is defined correctly and that the agent has permission to write to its working directory.
+            |REPL output:
+            |```scala
+            |${embedString(jarOutput.replaceAllLiterally(jarPath.toString, jarRelPath.toString))}
+            |```
+            |""".stripMargin
+        )
+    }
+
+    def loadPredef(skill: Skill): Result[Unit, String] = task {
+      val _ = step(
+        skill.predef,
+        s"""Could not execute scaffolding code for universe `${skill.universe}`, given by the code:
+          |```scala
+          |${embedString(skill.predef)}
+          |```
+          |This is an issue with the Skill definition. Please tell the maintainers of the skill to fix the issue.
+          |""".stripMargin
+      ).ok
+    }
+
+    def runExpression(builtins: Skill, skill: Skill, scalaCode: String): Result[String, String] =
+      stateless {
+        val uuid = java.util.UUID.randomUUID().toString.replaceAll("-", "_")
+        val methodName = s"agentCode_$uuid"
+        result {
+          loadJar(builtins).check
+          loadPredef(builtins).check
+          loadJar(skill).check
+          loadPredef(skill).check
+          step(
+            s"""def $methodName() = {
+            |${embedString(scalaCode)}
+            |}
+            |""".stripMargin,
+            s"while compiling agent generated code for universe `${skill.universe}`."
+          ).ok
+          step(
+            s"""builtins.builtinPrintAndFormatData($methodName())""",
+            s"while running agent generated code for universe `${skill.universe}`."
+          ).ok
+        }
+      }
+
+    def stateless[T](op: => T): T = lock.synchronized {
+      try op
+      finally
+        resetToInitial()
+        state = initialState
+        ReplOutputStream.clearBuffer()
+    }
   }
 
-  object MyBufferedOutputStream extends java.io.OutputStream {
+  private object ReplOutputStream extends java.io.OutputStream {
     private val buffer = new StringBuilder
-    private val lock = new Object
 
     def flushBuffer(): String =
       lock.synchronized {
@@ -93,12 +159,12 @@ object ReplExec {
       }
   }
 
-  val globalSession = new Session(new PrintStream(MyBufferedOutputStream))
+  private val globalSession = new Session(new PrintStream(ReplOutputStream))
 
-  def runCode(skill: Skill, scalaCode: String): Result[String, String] = try {
-    globalSession.runExpression(skill, scalaCode)
+  def runCode(builtins: Skill, skill: Skill, scalaCode: String): Result[String, String] = try {
+    globalSession.runExpression(builtins, skill, scalaCode)
   } finally {
-    MyBufferedOutputStream.clearBuffer()
+    ReplOutputStream.clearBuffer()
   }
 
   def compileSkill(skill: Skill): os.Path = {

@@ -20,6 +20,7 @@ import capybara.agent.OllamaClient.ResolvedChunk
 object ScalaAgent {
 
   private val skillsDir = pwd / "skills"
+  private val builtinSkillsDir = pwd / "builtin-skills"
 
   def renderSkills(skills: Seq[Skill]): String = {
     Skills.renderPrompt("\n\n", skills)
@@ -27,6 +28,8 @@ object ScalaAgent {
   val skills =
     try Skills.loadAll(skillsDir)
     catch { case _: IllegalArgumentException => Nil }
+  val builtinSkill =
+    Skills.loadAll(builtinSkillsDir).filter(_.universe == "capybara-builtins").head
   val SystemPrompt = {
     s"""|## TOOL CALLING:
         |You only have access to the `run_scala_code` tool.
@@ -123,25 +126,34 @@ object ScalaAgent {
                   scala.concurrent.blocking {
                     skills.find(_.universe == scalaCode.arguments.universe) match
                       case Some(skill) =>
-                        ReplExec.runCode(skill, scalaCode.arguments.scala_code)
+                        ReplExec.runCode(builtinSkill, skill, scalaCode.arguments.scala_code)
                       case None =>
                         Result.Err(s"Universe ${scalaCode.arguments.universe} not found")
                   }
                 }
               }
-              promise.future.onComplete({ case res =>
-                if res.isFailure then
+              promise.future.onComplete({ case try0 =>
+                def strippedAnsi(str: String): String =
+                  str.replaceAll("\u001B\\[[;\\d]*m", "")
+                val normalized = try0 match {
+                  case scala.util.Success(res) =>
+                    res match {
+                      case Result.Ok(value)  => Result.Ok(strippedAnsi(value))
+                      case Result.Err(error) => Result.Err(strippedAnsi(error))
+                    }
+                  case scala.util.Failure(exception) =>
+                    Result.Err(
+                      s"Exception while executing code: ${strippedAnsi(exception.getMessage)}"
+                    )
+                }
+
+                if normalized.isErr then
                   log.print(
-                    s"${Console.RED}Error executing code chunk [$callId]: ${res.failed.get.getMessage}${Console.RESET}\n"
+                    s"${Console.RED}Error executing code chunk [$callId]:\n---\n${normalized.getErr}${Console.RESET}\n"
                   )
                 else
-                  val resultStr = res.getOrElse(Result.Err("No response")) match {
-                    case Result.Ok(value)  => value
-                    case Result.Err(error) => s"Error: $error"
-                  }
-                  val strippedAnsi = resultStr.replaceAll("\u001B\\[[;\\d]*m", "")
                   log.print(
-                    s"${Console.GREEN}Result for code chunk [$callId]:\n```\n${strippedAnsi}\n```${Console.RESET}\n"
+                    s"${Console.GREEN}Result for code chunk [$callId]:\n---\n${normalized.get}${Console.RESET}\n"
                   )
               })
               log.print(
@@ -166,7 +178,8 @@ object ScalaAgent {
     }
     Future
       .sequence(
-        skills.map(skill => Future { scala.concurrent.blocking(ReplExec.compileSkill(skill)) })
+        (builtinSkill +: skills)
+          .map(skill => Future { scala.concurrent.blocking(ReplExec.compileSkill(skill)) })
       )
       .flatMap(_ =>
         request.send(chunker).flatMap {
