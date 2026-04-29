@@ -7,7 +7,6 @@ import scala.math.ScalaNumber
 
 @assumeSafe
 object builtins extends system.Builtins { self =>
-
   def convertAsShowable(any: Any): system.Showable =
     any match {
       case s: String       => system.Literal(s)
@@ -18,7 +17,7 @@ object builtins extends system.Builtins { self =>
       case f: Float        => system.Literal(f)
       case sh: Short       => system.Literal(sh)
       case by: Byte        => system.Literal(by)
-      case null            => system.Literal("null")
+      case null            => system.Literal(null)
       case sn: ScalaNumber =>
         system.Literal(sn)
       case seq: scala.collection.Seq[?] =>
@@ -52,28 +51,33 @@ object builtins extends system.Builtins { self =>
         system.Literal(other.toString)
     }
 
-  def displayShowable(showable: system.Showable): String =
+  def displayShowable(showable: system.Showable, isKey: Boolean): String =
+    def asString(str: String): String =
+      '"' + str
+        .replaceAllLiterally("\"", "\\\"")
+        .replaceAllLiterally("\n", "\\n")
+        .replaceAllLiterally("\r", "\\r")
+        .replaceAllLiterally("\t", "\\t") + '"'
     showable match {
       case showable: system.Literal =>
-        showable.value match
-          case value: String =>
-            '"' + value
-              .replaceAllLiterally("\"", "\\\"")
-              .replaceAllLiterally("\n", "\\n")
-              .replaceAllLiterally("\r", "\\r")
-              .replaceAllLiterally("\t", "\\t") + '"'
-          case value => value.toString
+        val (raw, isString) = showable.value match
+          case null          => ("null", false)
+          case value: String => (value, true)
+          case value         => (value.toString, false)
+        if isKey || isString then asString(raw) else raw
       case showable: system.ShowableSeq =>
-        showable.value.map(displayShowable).mkString("[", ", ", "]")
+        val raw = showable.value.map(displayShowable(_, isKey = false)).mkString("[", ", ", "]")
+        if isKey then asString(raw) else raw
       case showable: system.ShowableObj =>
-        showable.value
+        val raw = showable.value
           .map { case (k, v) =>
-            s"${displayShowable(k)}: ${displayShowable(v)}"
+            s"${displayShowable(k, isKey = true)}: ${displayShowable(v, isKey = false)}"
           }
           .mkString("{", ", ", "}")
+        if isKey then asString(raw) else raw
     }
 
   def builtinPrintAndFormatData(any: into[system.Magnet]): Unit =
     val showable = convertAsShowable(any.inner)
-    println(displayShowable(showable))
+    println(displayShowable(showable, isKey = false))
 }

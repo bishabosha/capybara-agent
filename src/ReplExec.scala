@@ -11,9 +11,19 @@ import steps.result.Result.apply as result
 import steps.result.Result.task as task
 import dotty.tools.dotc.reporting.Diagnostic
 import scala.util.boundary.Label
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
 
 object ReplExec {
   type ResultBody[+T, +E] = Label[Result.Err[E]] ?=> T
+
+  enum ScalaToolResult:
+    case Success(value: ujson.Value)
+    case Failure(error: String)
+
+    def encodeAsJson: String = this match
+      case Success(value) => ujson.write(ujson.Obj("value" -> value))
+      case Failure(error) => ujson.write(ujson.Obj("error" -> error))
 
   private object lock
 
@@ -167,6 +177,48 @@ object ReplExec {
     ReplOutputStream.clearBuffer()
   }
 
+  def runCodeHarness(builtins: Skill, skill: Skill, scalaCode: String, callId: Int, log: Logger)(
+      using ExecutionContext
+  ): Future[ScalaToolResult] =
+    def strippedAnsi(str: String): String =
+      str.replaceAll("\u001B\\[[;\\d]*m", "")
+    Future[Result[String, String]] {
+      scala.concurrent.blocking {
+        runCode(builtins, skill, scalaCode)
+      }
+    }.transform({ try0 =>
+      val normalized = try0 match
+        case scala.util.Success(res) =>
+          res match
+            case Result.Ok(value) =>
+              try
+                val data = ujson.read(strippedAnsi(value))
+                ScalaToolResult.Success(data)
+              catch
+                case err: Exception =>
+                  ScalaToolResult.Failure(
+                    s"Failed to parse output as JSON: ${strippedAnsi(value)}. Error: ${err.getMessage}"
+                  )
+            case Result.Err(error) =>
+              ScalaToolResult.Failure(strippedAnsi(error))
+        case scala.util.Failure(exception) =>
+          ScalaToolResult.Failure(
+            s"Exception while executing code: ${strippedAnsi(exception.getMessage)}"
+          )
+      locally {
+        normalized.match
+          case ScalaToolResult.Success(value) =>
+            log.print(
+              s"${Console.GREEN}Result for code chunk [$callId]:\n---\n${value}${Console.RESET}\n"
+            )
+          case ScalaToolResult.Failure(error) =>
+            log.print(
+              s"${Console.RED}Error executing code chunk [$callId]:\n---\n${error}${Console.RESET}\n"
+            )
+      }
+      scala.util.Success(normalized)
+    })
+
   def compileSkill(skill: Skill): os.Path = {
     def digestFrom(strings: String*): String = {
       val hasher = java.security.MessageDigest.getInstance("SHA-256")
@@ -190,11 +242,11 @@ object ReplExec {
       .exists(targetImplJar) || existingSigs.map(_ != digest).getOrElse(true)
     if (shouldWrite) {
       os.write.over(outdir / "sigs.hash", digest)
-      val tempDir = os.pwd / ".agent-runtime/temp"
+      val tempDir = os.pwd / ".agent-runtime" / "temp" / skill.name
       try
         os.makeDir.all(tempDir)
         withTempFile(tempDir, "Interface.scala") { tempInterface =>
-          os.write(tempInterface, skill.interface)
+          os.write.over(tempInterface, skill.interface)
           withTempFile(tempDir, "sigs.jar") { sigsJar =>
             os.proc(
               Seq[os.Shellable](
@@ -202,6 +254,7 @@ object ReplExec {
                 "--power",
                 "package",
                 "--library",
+                "-f",
                 "-o",
                 sigsJar,
                 "-language:experimental.safe",
@@ -210,7 +263,7 @@ object ReplExec {
             ).call()
             os.copy(sigsJar, targetSigJar, replaceExisting = true)
             withTempFile(tempDir, "Implementation.scala") { tempCode =>
-              os.write(tempCode, skill.code)
+              os.write.over(tempCode, skill.code)
               withTempFile(tempDir, "impl.jar") { implJar =>
                 os.proc(
                   Seq[os.Shellable](
@@ -218,6 +271,7 @@ object ReplExec {
                     "--power",
                     "package",
                     "--library",
+                    "-f",
                     "-o",
                     implJar,
                     "--extra-jar",
