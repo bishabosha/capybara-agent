@@ -16,6 +16,7 @@ import scala.jdk.CollectionConverters.given
 
 import OllamaClient.ChunkOutput
 import capybara.agent.OllamaClient.ResolvedChunk
+import ReplExec.ScalaToolResult
 
 object ScalaAgent {
 
@@ -47,7 +48,7 @@ object ScalaAgent {
   def singleRequest(query: String, log: Logger)(using
       ExecutionContext
   ): Future[Result[Seq[
-    ResolvedChunk[(universe: String, scala_code: String), Result[String, String]]
+    ResolvedChunk[(universe: String, scala_code: String), ScalaToolResult]
   ], String]] = {
     val tool = OllamaClient.toolsDef[(universe: String, scala_code: String)](
       "run_scala_code",
@@ -72,7 +73,7 @@ object ScalaAgent {
           collected: Result[Seq[
             (Int, Chunk[(universe: String, scala_code: String)])
           ], String],
-          scalaCommands: Map[Int, Promise[Result[String, String]]]
+          scalaCommands: Map[Int, Promise[ScalaToolResult]]
       )
     ]()
     val chunker = new ChunkOutput.ChunkReader[Chunk[(universe: String, scala_code: String)]]() {
@@ -87,7 +88,7 @@ object ScalaAgent {
         ]()
       private val commandCounter = new java.util.concurrent.atomic.AtomicInteger(0)
       private val scalaCommands =
-        new java.util.concurrent.ConcurrentHashMap[Int, Promise[Result[String, String]]]()
+        new java.util.concurrent.ConcurrentHashMap[Int, Promise[ScalaToolResult]]()
       private var seenContent =
         new java.util.concurrent.atomic.AtomicBoolean(false)
       private var seenTools =
@@ -118,44 +119,26 @@ object ScalaAgent {
               commandCounter.get() + 1
             for scalaCode <- tool_calls do
               // todo: extract tool call id from llm?
-              val promise = Promise[Result[String, String]]()
+              val promise = Promise[ScalaToolResult]()
               val callId = commandCounter.incrementAndGet()
               scalaCommands.put(callId, promise)
               promise.tryCompleteWith {
-                Future {
-                  scala.concurrent.blocking {
-                    skills.find(_.universe == scalaCode.arguments.universe) match
-                      case Some(skill) =>
-                        ReplExec.runCode(builtinSkill, skill, scalaCode.arguments.scala_code)
-                      case None =>
-                        Result.Err(s"Universe ${scalaCode.arguments.universe} not found")
-                  }
-                }
-              }
-              promise.future.onComplete({ case try0 =>
-                def strippedAnsi(str: String): String =
-                  str.replaceAll("\u001B\\[[;\\d]*m", "")
-                val normalized = try0 match {
-                  case scala.util.Success(res) =>
-                    res match {
-                      case Result.Ok(value)  => Result.Ok(strippedAnsi(value))
-                      case Result.Err(error) => Result.Err(strippedAnsi(error))
-                    }
-                  case scala.util.Failure(exception) =>
-                    Result.Err(
-                      s"Exception while executing code: ${strippedAnsi(exception.getMessage)}"
+                skills.find(_.universe == scalaCode.arguments.universe) match
+                  case Some(skill) =>
+                    ReplExec.runCodeHarness(
+                      builtinSkill,
+                      skill,
+                      scalaCode.arguments.scala_code,
+                      callId,
+                      log
                     )
-                }
-
-                if normalized.isErr then
-                  log.print(
-                    s"${Console.RED}Error executing code chunk [$callId]:\n---\n${normalized.getErr}${Console.RESET}\n"
-                  )
-                else
-                  log.print(
-                    s"${Console.GREEN}Result for code chunk [$callId]:\n---\n${normalized.get}${Console.RESET}\n"
-                  )
-              })
+                  case None =>
+                    Future.successful(
+                      ScalaToolResult.Failure(
+                        s"Universe not found: ${scalaCode.arguments.universe}"
+                      )
+                    )
+              }
               log.print(
                 s"${Console.YELLOW}${scalaCode.name}[${scalaCode.arguments.universe}]:${Console.RESET}\n"
               )
@@ -195,7 +178,10 @@ object ScalaAgent {
                   case Chunk.Tools(tool_calls)  =>
                     ResolvedChunk.Tools(
                       tool_calls.zipWithIndex.map { case (tc, idx) =>
-                        (tc, results.toMap.getOrElse(id + idx, Result.Err("No response")))
+                        (
+                          tc,
+                          results.toMap.getOrElse(id + idx, ScalaToolResult.Failure("No response"))
+                        )
                       }.toVector
                     )
               })
