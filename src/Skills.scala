@@ -6,7 +6,7 @@ import Result.apply as result
 import os.{Path, read, list, exists, isDir}
 import org.virtuslab.yaml.*
 
-type SkillManifest = (universe: String, api: String, predef: String)
+type SkillManifest = (universe: String, api: String, predef: Option[String])
 
 case class Skill(
     name: String,
@@ -15,7 +15,7 @@ case class Skill(
     interface: String,
     code: String,
     api: String,
-    predef: String
+    predef: Option[String]
 )
 
 case class SkillMd(
@@ -62,7 +62,7 @@ object Skills {
       interface = interfaceCode,
       code = implCode,
       api = manifest.api,
-      predef = manifest.predef
+      predef = manifest.predef.filter(_.nonEmpty)
     )
   }
 

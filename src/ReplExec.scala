@@ -15,6 +15,8 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 
 object ReplExec {
+  val ScalaVersion = "3.9.0-RC1-bin-20260430-a24622b-NIGHTLY"
+
   type ResultBody[+T, +E] = Label[Result.Err[E]] ?=> T
 
   enum ScalaToolResult:
@@ -68,7 +70,15 @@ object ReplExec {
         |""".stripMargin
 
     def step(command: String, label: String): Result[String, String] = result {
-      runWithState(command)
+      val execResult = Result.catchException({ case e =>
+        s"""${embedString(label)}
+          |
+          |Errors summarized:
+          |$e
+          |${embedString(state.context.reporter.allErrors.map(renderMessage).mkString("\n"))}
+          |""".stripMargin
+      })({ runWithState(command) })
+      execResult.check
       val output = ReplOutputStream.flushBuffer()
       if state.context.reporter.hasErrors then raise(s"""${embedString(label)}
           |
@@ -85,12 +95,14 @@ object ReplExec {
 
     def embedString(str: String) = str.linesIterator.mkString("\n|")
 
-    def loadJar(skill: Skill): Result[Unit, String] = task {
-      val jarRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "impl.jar"
+    def loadJar(jarRelPath: os.RelPath, skill: Skill): Result[Unit, String] = task {
       val jarPath = os.pwd / jarRelPath
       runWithState(s":jar $jarPath")
       val jarOutput = ReplOutputStream.flushBuffer()
-      val cpError: PartialFunction[String, Unit] = { case s"""Cannot add "$_" to classpath.""" => }
+      val cpError: PartialFunction[String, Unit] = {
+        case s"""Cannot add "$_" to classpath."""    =>
+        case s"""The path '$_' cannot be loaded$_""" =>
+      }
       if jarOutput.linesIterator.collectFirst(cpError).isDefined then
         raise(
           s"""Failed to load implementation JAR for universe `${skill.universe}` at path: $jarRelPath
@@ -102,18 +114,38 @@ object ReplExec {
             |```
             |""".stripMargin
         )
+      else {
+        // useful debugging below
+        // println(
+        //   s"RAW:${jarOutput}\nLoaded JAR for universe `${skill.universe}` from $jarPath,\nclasspath:\n${state.context.platform
+        //       .classPath(using state.context)
+        //       .asURLs
+        //       .mkString(">  ", "\n>  ", "\n")}"
+        // )
+      }
     }
 
     def loadPredef(skill: Skill): Result[Unit, String] = task {
-      val _ = step(
-        skill.predef,
-        s"""Could not execute scaffolding code for universe `${skill.universe}`, given by the code:
-          |```scala
-          |${embedString(skill.predef)}
-          |```
-          |This is an issue with the Skill definition. Please tell the maintainers of the skill to fix the issue.
-          |""".stripMargin
-      ).ok
+      skill.predef match
+        case Some(predef) =>
+          val _ = step(
+            predef,
+            s"""Could not execute scaffolding code for universe `${skill.universe}`, given by the code:
+              |```scala
+              |${embedString(predef)}
+              |```
+              |This is an issue with the Skill definition. Please tell the maintainers of the skill to fix the issue.
+              |""".stripMargin
+          ).ok
+        case _ => ()
+    }
+
+    def loadSkill(skill: Skill): Result[Unit, String] = task {
+      val sigsRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "sigs.jar"
+      val implRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "impl.jar"
+      loadJar(sigsRelPath, skill).check
+      loadJar(implRelPath, skill).check
+      loadPredef(skill).check
     }
 
     def runExpression(builtins: Skill, skill: Skill, scalaCode: String): Result[String, String] =
@@ -121,10 +153,8 @@ object ReplExec {
         val uuid = java.util.UUID.randomUUID().toString.replaceAll("-", "_")
         val methodName = s"agentCode_$uuid"
         result {
-          loadJar(builtins).check
-          loadPredef(builtins).check
-          loadJar(skill).check
-          loadPredef(skill).check
+          loadSkill(builtins).check
+          loadSkill(skill).check
           val _ = step(
             s"""def $methodName() = {
             |${embedString(scalaCode)}
@@ -222,7 +252,7 @@ object ReplExec {
   def compileSkill(skill: Skill): os.Path = {
     def digestFrom(strings: String*): String = {
       val hasher = java.security.MessageDigest.getInstance("SHA-256")
-      for sourceCode <- strings.map(_.getBytes()) do hasher.update(sourceCode)
+      for sourceCode <- strings.filter(_.nonEmpty).map(_.getBytes()) do hasher.update(sourceCode)
       val digest = hasher.digest()
       val base64 = java.util.Base64.getEncoder.encodeToString(digest)
       base64
@@ -237,7 +267,8 @@ object ReplExec {
     val targetSigJar = outdir / "sigs.jar"
     val targetImplJar = outdir / "impl.jar"
     val existingSigs = scala.util.Try(os.read(outdir / "sigs.hash"))
-    val digest = digestFrom(skill.interface, skill.code, skill.api, skill.predef)
+    val digest =
+      digestFrom(ScalaVersion, skill.interface, skill.code, skill.api, skill.predef.getOrElse(""))
     val shouldWrite = !os.exists(targetSigJar) || !os
       .exists(targetImplJar) || existingSigs.map(_ != digest).getOrElse(true)
     if (shouldWrite) {
@@ -246,6 +277,9 @@ object ReplExec {
       try
         os.makeDir.all(tempDir)
         withTempFile(tempDir, "Interface.scala") { tempInterface =>
+          val intfdirectives = skill.interface.linesIterator.toVector.takeWhile(line =>
+            line.startsWith("//> using ") || line.trim.isEmpty()
+          )
           os.write.over(tempInterface, skill.interface)
           withTempFile(tempDir, "sigs.jar") { sigsJar =>
             val _ = os.call(
@@ -253,6 +287,8 @@ object ReplExec {
                 "scala",
                 "--power",
                 "package",
+                "-S",
+                ScalaVersion,
                 "--library",
                 "-f",
                 "-o",
@@ -263,13 +299,23 @@ object ReplExec {
             )
             os.copy(sigsJar, targetSigJar, replaceExisting = true)
             withTempFile(tempDir, "Implementation.scala") { tempCode =>
-              os.write.over(tempCode, skill.code)
+              val (directives, file) = skill.code.linesIterator.toVector.span(line =>
+                line.startsWith("//> using ") || line.trim.isEmpty()
+              )
+              val directives0 = (intfdirectives ++ directives)
+                .filterNot(line =>
+                  line.startsWith("//> using file ") || line.startsWith("//> using files ")
+                )
+              val code0 = (directives0 ++ file).mkString(java.lang.System.lineSeparator())
+              os.write.over(tempCode, code0)
               withTempFile(tempDir, "impl.jar") { implJar =>
                 val _ = os.call(
                   cmd = (
                     "scala",
                     "--power",
                     "package",
+                    "-S",
+                    ScalaVersion,
                     "--library",
                     "-f",
                     "-o",

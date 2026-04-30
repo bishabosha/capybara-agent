@@ -1,21 +1,23 @@
 //> using file Interface.scala
-package fs_impl
+package fs.internal
 import scala.language.experimental.{captureChecking, separationChecking}
-import java.nio.file.{Paths as JPaths, Path as JPath, Files}
 import caps.assumeSafe
+import java.nio.file.{Paths as JPaths, Path as JPath, Files}
 import scala.jdk.CollectionConverters.given
-@assumeSafe
-object filesystem extends fs.Filesystem { self =>
-  class P(val inner: JPath) extends Path {
+
+private object PrivateFilesystem extends fs.Filesystem {
+  class Path(val inner: JPath) {
     override def toString = inner.toString
   }
-  object P {
-    def unapply(path: P): Some[JPath] = Some(path.inner)
+  object Path {
+    def unapply(path: Path): Some[JPath] = Some(path.inner)
   }
-  def pwd(): P = P(JPaths.get("."))
-  def list(path: Path): Seq[P] =
+  def pwd(): Path = Path(JPaths.get("."))
+  def list(path: Path): Seq[Path] =
     path match {
-      case P(p) => Files.list(p).iterator().asScala.map(o => P(o)).toSeq
-      case _    => ???
+      case Path(p) => Files.list(p).iterator().asScala.map(o => Path(o)).toSeq
     }
 }
+
+@assumeSafe
+val impl: fs.Filesystem = PrivateFilesystem

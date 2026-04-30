@@ -23,7 +23,7 @@ def main(query: Option[String]) =
             case Result.Err(error) =>
               printError(error)
         })
-        Terminal.Continue
+        Terminal.NextState.Continue
       }
 
 def runSession(query: String, history: Vector[OllamaClient.ChatMessage])(using
