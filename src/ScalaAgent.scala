@@ -20,6 +20,9 @@ import ReplExec.ScalaToolResult
 
 object ScalaAgent {
 
+  type ScalaToolCall = (universe: String, scala_code: String)
+  type ScalaResolvedChunk = ResolvedChunk[ScalaToolCall, ScalaToolResult]
+
   private val skillsDir = pwd / "skills"
   private val builtinSkillsDir = pwd / "builtin-skills"
 
@@ -47,10 +50,13 @@ object ScalaAgent {
 
   def singleRequest(query: String, log: Logger)(using
       ExecutionContext
-  ): Future[Result[Seq[
-    ResolvedChunk[(universe: String, scala_code: String), ScalaToolResult]
-  ], String]] = {
-    val tool = OllamaClient.toolsDef[(universe: String, scala_code: String)](
+  ): Future[Result[Seq[ScalaResolvedChunk], String]] =
+    singleRequest(Vector(OllamaClient.ChatMessage.user(query)), log)
+
+  def singleRequest(history: Seq[OllamaClient.ChatMessage], log: Logger)(using
+      ExecutionContext
+  ): Future[Result[Seq[ScalaResolvedChunk], String]] = {
+    val tool = OllamaClient.toolsDef[ScalaToolCall](
       "run_scala_code",
       """Execute a Scala expression.
         |The system does not have access to side-effecting operations such as `println` or file I/O
@@ -63,8 +69,7 @@ object ScalaAgent {
     val request = OllamaClient.request(
       // model = "qwen3.5:35b-a3b-coding-nvfp4",
       model = "qwen3.6:35b-a3b-coding-nvfp4",
-      system = SystemPrompt,
-      query,
+      messages = OllamaClient.ChatMessage.system(SystemPrompt) +: history,
       tools = tool.tools,
       toolParsers = tool.toolParsers
     )
@@ -189,6 +194,53 @@ object ScalaAgent {
           case err: Result.Err[?] => Future.successful(err)
         }
       )
+  }
+
+  def hasToolCalls(chunks: Seq[ScalaResolvedChunk]): Boolean =
+    chunks.exists {
+      case ResolvedChunk.Tools(toolCalls) => toolCalls.nonEmpty
+      case _                             => false
+    }
+
+  def appendCollectedChunks(
+      history: Vector[OllamaClient.ChatMessage],
+      chunks: Seq[ScalaResolvedChunk]
+  ): Vector[OllamaClient.ChatMessage] =
+    history ++ messagesFromChunks(chunks)
+
+  private def messagesFromChunks(
+      chunks: Seq[ScalaResolvedChunk]
+  ): Vector[OllamaClient.ChatMessage] = {
+    val thinking = new StringBuilder
+    val content = new StringBuilder
+    val toolCalls = Vector.newBuilder[OllamaClient.ToolCall[ScalaToolCall]]
+    val toolResults = Vector.newBuilder[OllamaClient.ChatMessage]
+
+    chunks.foreach {
+      case ResolvedChunk.Thinking(chunk) =>
+        thinking.append(chunk)
+      case ResolvedChunk.Content(chunk) =>
+        content.append(chunk)
+      case ResolvedChunk.Tools(calls) =>
+        calls.foreach { case (toolCall, result) =>
+          toolCalls += toolCall
+          toolResults += OllamaClient.ChatMessage.tool(toolCall.name, result.encodeAsJson)
+        }
+    }
+
+    val accumulatedToolCalls = toolCalls.result()
+    val assistant =
+      if thinking.nonEmpty || content.nonEmpty || accumulatedToolCalls.nonEmpty then
+        Vector(
+          OllamaClient.ChatMessage.assistant(
+            thinking = thinking.toString,
+            content = content.toString,
+            toolCalls = accumulatedToolCalls
+          )
+        )
+      else Vector.empty
+
+    assistant ++ toolResults.result()
   }
 
 }

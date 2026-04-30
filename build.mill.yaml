@@ -1,11 +1,13 @@
 mill-build:
   bspScriptIgnore:
     - skills/
+    - builtin-skills/
     - .metals/
 extends: ScalaModule
 scalaVersion: 3.8.3
 scalacOptions:
   - -Wunused:imports
+  - -Wnonunit-statement
 mvnDeps:
   - com.lihaoyi::mainargs:0.7.8
   - com.softwaremill.sttp.client4::core:4.0.21

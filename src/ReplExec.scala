@@ -125,7 +125,7 @@ object ReplExec {
           loadPredef(builtins).check
           loadJar(skill).check
           loadPredef(skill).check
-          step(
+          val _ = step(
             s"""def $methodName() = {
             |${embedString(scalaCode)}
             |}
@@ -248,8 +248,8 @@ object ReplExec {
         withTempFile(tempDir, "Interface.scala") { tempInterface =>
           os.write.over(tempInterface, skill.interface)
           withTempFile(tempDir, "sigs.jar") { sigsJar =>
-            os.proc(
-              Seq[os.Shellable](
+            val _ = os.call(
+              cmd = (
                 "scala",
                 "--power",
                 "package",
@@ -260,13 +260,13 @@ object ReplExec {
                 "-language:experimental.safe",
                 tempInterface
               )
-            ).call()
+            )
             os.copy(sigsJar, targetSigJar, replaceExisting = true)
             withTempFile(tempDir, "Implementation.scala") { tempCode =>
               os.write.over(tempCode, skill.code)
               withTempFile(tempDir, "impl.jar") { implJar =>
-                os.proc(
-                  Seq[os.Shellable](
+                val _ = os.call(
+                  cmd = (
                     "scala",
                     "--power",
                     "package",
@@ -278,7 +278,7 @@ object ReplExec {
                     sigsJar,
                     tempCode
                   )
-                ).call()
+                )
                 os.copy(implJar, targetImplJar, replaceExisting = true)
               }
             }

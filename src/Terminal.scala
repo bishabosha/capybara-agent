@@ -4,11 +4,11 @@ import org.jline.reader.{EndOfFileException, UserInterruptException}
 import org.jline.reader.LineReaderBuilder
 import org.jline.terminal.TerminalBuilder
 import scala.util.Using
-
-import scala.concurrent.Future
+import scala.annotation.tailrec
 
 object Terminal {
-  def run(prompt: Logger ?=> String => Future[Any]): Unit = {
+  case object Continue
+  def run(prompt: Logger ?=> String => Continue.type): Unit = {
     val terminal =
       TerminalBuilder
         .builder()
@@ -21,6 +21,7 @@ object Terminal {
         .terminal(terminal)
         .build()
 
+    @tailrec
     def loop()(using logger: Logger): Unit =
       logger.flush()
       try
@@ -30,16 +31,13 @@ object Terminal {
           case line if line.trim.equalsIgnoreCase(":q") =>
             ()
           case line =>
-            awaitAll(
-              prompt(line)
-            )
-            loop()
+            val _ = prompt(line)
       catch
         case _: UserInterruptException =>
           terminal.writer.println("^C")
-          loop()
         case _: EndOfFileException =>
           ()
+      loop()
 
     terminal.writer.println("Type something. Type 'exit' to quit.")
     Using.resource(Logger.TerminalLogger(terminal.writer)) { logger =>
