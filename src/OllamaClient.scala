@@ -14,6 +14,7 @@ import scala.concurrent.Future
 import scala.concurrent.blocking
 import upickle.jsonschema.JsonSchema
 import scala.deriving.Mirror
+import scala.NamedTuple.AnyNamedTuple
 
 object OllamaClient {
 
@@ -138,6 +139,66 @@ object OllamaClient {
       arguments: T
   )
 
+  final case class ChatMessage(json: ujson.Value)
+
+  object ChatMessage {
+    def apply[T <: AnyNamedTuple: Writer](obj: T): ChatMessage =
+      ChatMessage(writeJs(obj))
+
+    def system(content: String): ChatMessage =
+      ChatMessage(
+        (
+          role = "system",
+          content = content
+        )
+      )
+
+    def user(content: String): ChatMessage =
+      ChatMessage(
+        (
+          role = "user",
+          content = content
+        )
+      )
+
+    def assistant[T: Writer](
+        thinking: String,
+        content: String,
+        toolCalls: Vector[ToolCall[T]]
+    ): ChatMessage = {
+      val message = writeJs {
+        (
+          role = "assistant",
+          content = content
+        )
+      }
+      if thinking.nonEmpty then message("thinking") = thinking
+      if toolCalls.nonEmpty then
+        message("tool_calls") = writeJs {
+          toolCalls.zipWithIndex.map { case (toolCall, index) =>
+            (
+              `type` = "function",
+              function = (
+                index = index,
+                name = toolCall.name,
+                arguments = toolCall.arguments
+              )
+            )
+          }
+        }
+      ChatMessage(message)
+    }
+
+    def tool(toolName: String, content: String): ChatMessage =
+      ChatMessage(
+        (
+          role = "tool",
+          tool_name = toolName,
+          content = content
+        )
+      )
+  }
+
   def parseArguments[T](
       name: String,
       arguments: ujson.Value,
@@ -183,32 +244,21 @@ object OllamaClient {
       }
     yield (message, msg.done)
 
-  def request[T](
+  def request[T: Writer](
       model: String,
-      system: String,
-      query: String,
+      messages: Seq[ChatMessage],
       tools: Vector[
         (`type`: String, function: (name: String, parameters: ujson.Value, description: String))
       ],
       toolParsers: Map[String, ReadWriter[T]]
   ): ChunkRequest[Chunk[T]] = {
     val output = new ChunkOutput[Chunk[T]]()
-    val bodyObj = {
+    val bodyObj =
       (
         model = model,
-        messages = Seq(
-          (
-            role = "system",
-            content = system
-          ),
-          (
-            role = "user",
-            content = query
-          )
-        ),
+        messages = messages.map(_.json),
         tools = tools
       )
-    }
     val req = quickRequest
       .post(uri"http://localhost:11434/api/chat")
       .body(

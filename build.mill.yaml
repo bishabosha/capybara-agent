@@ -1,11 +1,14 @@
 mill-build:
   bspScriptIgnore:
     - skills/
+    - builtin-skills/
     - .metals/
 extends: ScalaModule
-scalaVersion: 3.8.3
+scalaVersion: 3.9.0-RC1-bin-20260430-a24622b-NIGHTLY
+repositories: ["https://repo.scala-lang.org/artifactory/maven-nightlies"]
 scalacOptions:
   - -Wunused:imports
+  - -Wnonunit-statement
 mvnDeps:
   - com.lihaoyi::mainargs:0.7.8
   - com.softwaremill.sttp.client4::core:4.0.21
@@ -13,7 +16,7 @@ mvnDeps:
   - com.lihaoyi::upickle-jsonschema:4.4.3
   - org.jline:jline:3.30.0
   - ch.epfl.lamp::steps:0.2.1
-  - org.scala-lang::scala3-repl:3.8.3
+  - org.scala-lang::scala3-repl:3.9.0-RC1-bin-20260430-a24622b-NIGHTLY
   - com.lihaoyi::os-lib:0.11.8
   - io.github.bishabosha::scala-object-notation:0.2.2-RC1
   - org.virtuslab::scala-yaml:0.3.1

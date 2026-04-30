@@ -1,5 +1,5 @@
 val Manifest = (
   universe = "filesystem",
-  api = "import fs.Filesystem; val filesystem: Filesystem = ...",
-  predef = "import fs_impl.filesystem"
+  api = "val filesystem: fs.Filesystem = ...",
+  predef = "val filesystem: fs.Filesystem = fs.internal.impl"
 )

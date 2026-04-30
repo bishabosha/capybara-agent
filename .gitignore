@@ -8,3 +8,4 @@ out/
 .bsp/
 out.txt
 **/.agent-runtime/
+.os-lib-watch-sentinel-*
