@@ -7,6 +7,8 @@ import scala.util.Using
 import scala.annotation.tailrec
 
 object Terminal {
+  private val Prompt = "> "
+
   enum NextState:
     case Continue
     case Exit
@@ -28,7 +30,7 @@ object Terminal {
       logger.flush()
       val nextState =
         try
-          reader.readLine("> ") match
+          reader.readLine(logger.prompt(Prompt)) match
             case null =>
               NextState.Exit
             case line if line.trim.equalsIgnoreCase(":q") =>
@@ -43,8 +45,10 @@ object Terminal {
             NextState.Exit
       if nextState == NextState.Continue then loop()
 
-    terminal.writer.println("Type something. Type 'exit' to quit.")
-    Using.resource(Logger.TerminalLogger(terminal.writer)) { logger =>
+    terminal.writer.println(
+      "Type something. Type a new line while the agent is responding to interrupt. Type ':q' to quit. Type '/usage' for token stats."
+    )
+    Using.resource(Logger.TerminalLogger(reader, terminal.writer, Prompt)) { logger =>
       loop()(using logger)
     }
     terminal.writer.println("Goodbye!")

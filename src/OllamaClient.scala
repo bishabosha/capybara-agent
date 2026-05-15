@@ -18,6 +18,14 @@ import scala.NamedTuple.AnyNamedTuple
 
 object OllamaClient {
 
+  final case class Usage(
+      promptEvalCount: Option[Int] = None,
+      evalCount: Option[Int] = None
+  )
+
+  object Usage:
+    val Empty: Usage = Usage()
+
   inline def toolsDef[T: {ReadWriter, Mirror.Of}](name: String, description: String) =
     given JsonSchema[T] = JsonSchema.derived[T]
     val schema = upickle.jsonschema.schema(upickle.default)[T]
@@ -69,7 +77,7 @@ object OllamaClient {
 
   object ChunkOutput {
     abstract class ChunkReader[Chunk]() {
-      def onComplete(finalState: ChunkOutputState & ChunkFinalState): Unit
+      def onComplete(finalState: ChunkOutputState & ChunkFinalState, usage: Usage): Unit
       def onChunk(chunk: Chunk): Unit
     }
   }
@@ -88,15 +96,15 @@ object OllamaClient {
       !(curr.isDone || curr.isError)
     }
     def failed(): Boolean = state.get().isError
-    def close() =
+    def close(usage: Usage = Usage.Empty) =
       if state.compareAndSet(ChunkOutputState.Running, ChunkOutputState.Done)
-      then listeners.get().foreach(_.onComplete(ChunkOutputState.Done))
-      else throw new IllegalStateException("close called while not running")
+      then listeners.get().foreach(_.onComplete(ChunkOutputState.Done, usage))
+      else ()
     def fail(message: String) =
       val errorState = ChunkOutputState.Error(message)
       if state.compareAndSet(ChunkOutputState.Running, errorState)
-      then listeners.get().foreach(_.onComplete(errorState))
-      else throw new IllegalStateException("fail called while not running")
+      then listeners.get().foreach(_.onComplete(errorState, Usage.Empty))
+      else ()
     def push(chunk: Chunk) =
       if (state.compareAndSet(ChunkOutputState.Running, ChunkOutputState.Append)) {
         listeners.get().foreach(_.onChunk(chunk))
@@ -108,12 +116,16 @@ object OllamaClient {
 
   class ChunkRequest[Chunk](
       inner: Request[Result[Unit, String]],
-      output: ChunkOutput[Chunk]
+      output: ChunkOutput[Chunk],
+      cancellationToken: CancellationToken
   ):
     def send(
         listeners: ChunkOutput.ChunkReader[Chunk]*
     )(using ExecutionContext): Future[Result[Unit, String]] =
-      if output.isRunning then
+      if cancellationToken.isCancelled then
+        output.close()
+        Future.successful(Result.Err("cancelled"))
+      else if output.isRunning then
         Future {
           blocking {
             listeners.foreach(output.registerListener)
@@ -211,7 +223,7 @@ object OllamaClient {
   def chunkParser[T](
       line: String,
       tools: Map[String, ReadWriter[T]]
-  ): Result[(message: Chunk[T], done: Boolean), String] =
+  ): Result[(message: Chunk[T], done: Boolean, usage: Usage), String] =
     val messageState = readSafe[(message: ujson.Value, done: Boolean)](line)
     def thinkingState(msg: ujson.Value) = readSafe[(thinking: String)](msg).tap(thinking =>
       require(thinking.thinking.nonEmpty, "unexpected empty thinking")
@@ -227,6 +239,20 @@ object OllamaClient {
         arguments <- readSafe[(arguments: ujson.Value)](toolCall)
         parsed <- parseArguments(name.name, arguments.arguments, tools)
       yield ToolCall(name.name, parsed)
+    def intField(json: ujson.Value, name: String): Option[Int] =
+      json.obj.get(name).flatMap {
+        case ujson.Num(value) => Some(value.toInt)
+        case ujson.Str(value) => value.toIntOption
+        case _                => None
+      }
+    def usageState: Usage =
+      try
+        val json = ujson.read(line)
+        Usage(
+          promptEvalCount = intField(json, "prompt_eval_count"),
+          evalCount = intField(json, "eval_count")
+        )
+      catch case _: Throwable => Usage.Empty
     for
       msg <- messageState
       content <- contentState(msg.message)
@@ -242,7 +268,7 @@ object OllamaClient {
             else Result(Chunk.Tools(calls.map(call => toolCallState(call.function).ok)))
           case _ => Result.Ok(Chunk.Content(content.content))
       }
-    yield (message, msg.done)
+    yield (message, msg.done, usageState)
 
   def request[T: Writer](
       model: String,
@@ -250,14 +276,19 @@ object OllamaClient {
       tools: Vector[
         (`type`: String, function: (name: String, parameters: ujson.Value, description: String))
       ],
-      toolParsers: Map[String, ReadWriter[T]]
+      toolParsers: Map[String, ReadWriter[T]],
+      contextWindow: Int,
+      keepAlive: String,
+      cancellationToken: CancellationToken = CancellationToken.Never
   ): ChunkRequest[Chunk[T]] = {
     val output = new ChunkOutput[Chunk[T]]()
     val bodyObj =
       (
         model = model,
         messages = messages.map(_.json),
-        tools = tools
+        tools = tools,
+        options = (num_ctx = contextWindow),
+        keep_alive = keepAlive
       )
     val req = quickRequest
       .post(uri"http://localhost:11434/api/chat")
@@ -272,22 +303,26 @@ object OllamaClient {
             val isr =
               m(new java.io.InputStreamReader(is, StandardCharsets.UTF_8))
             val reader = m(new java.io.BufferedReader(isr))
-            var completed = false
+            var completed = cancellationToken.isCancelled
             var line: String | Null = null
-            while
+            while !completed do
               line = reader.readLine()
-              !completed && line != null
-            do
-              val parsed = chunkParser(line, toolParsers)
-              parsed match
-                case Result.Ok((chunk, d)) =>
-                  output.push(chunk)
-                  if d then output.close()
-                  completed = d
-                case Result.Err(error) =>
-                  output.fail(s"while reading response chunk: $error\n[debug]: $line")
-                  completed = true
-            if !completed then output.fail("unexpected end of stream")
+              if cancellationToken.isCancelled then
+                output.close()
+                completed = true
+              else if line == null then completed = true
+              else
+                val parsed = chunkParser(line, toolParsers)
+                parsed match
+                  case Result.Ok((chunk, d, usage)) =>
+                    output.push(chunk)
+                    if d then output.close(usage)
+                    completed = d
+                  case Result.Err(error) =>
+                    output.fail(s"while reading response chunk: $error\n[debug]: $line")
+                    completed = true
+            if cancellationToken.isCancelled then output.close()
+            else if line == null then output.fail("unexpected end of stream")
           } match {
             case scala.util.Success(_) =>
               ()
@@ -299,9 +334,11 @@ object OllamaClient {
             readSafe[(error: String)](err).match
               case Result.Ok(msg)    => Result.Err(s"request failed: ${msg.error}")
               case Result.Err(error) => Result.Err(s"could not parse request failure: $error")
-          case Right(_) => Result.Ok(())
+          case Right(_) =>
+            if cancellationToken.isCancelled then Result.Err("cancelled")
+            else Result.Ok(())
         })
       )
-    ChunkRequest(req, output)
+    ChunkRequest(req, output, cancellationToken)
   }
 }

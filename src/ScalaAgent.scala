@@ -22,9 +22,31 @@ object ScalaAgent {
 
   type ScalaToolCall = (universe: String, scala_code: String)
   type ScalaResolvedChunk = ResolvedChunk[ScalaToolCall, ScalaToolResult]
+  final case class AgentResponse(chunks: Seq[ScalaResolvedChunk], usage: OllamaClient.Usage)
+  private type RawScalaChunk = (Int, Chunk[ScalaToolCall])
+  private final case class RawAgentResponse(chunks: Seq[RawScalaChunk], usage: OllamaClient.Usage)
 
   private val skillsDir = pwd / "skills"
   private val builtinSkillsDir = pwd / "builtin-skills"
+  val Model = "qwen3.6:35b-a3b-coding-nvfp4"
+  val DefaultContextWindow = 32768
+  val DefaultKeepAlive = "30m"
+  private val ContextWindowEnv = "CAPYBARA_CONTEXT_WINDOW"
+  private val KeepAliveEnv = "CAPYBARA_KEEP_ALIVE"
+
+  def configuredContextWindow: Int =
+    sys.env
+      .get(ContextWindowEnv)
+      .flatMap(_.toIntOption)
+      .filter(_ > 0)
+      .getOrElse(DefaultContextWindow)
+
+  def configuredKeepAlive: String =
+    sys.env
+      .get(KeepAliveEnv)
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .getOrElse(DefaultKeepAlive)
 
   def renderSkills(skills: Seq[Skill]): String = {
     Skills.renderPrompt("\n\n", skills)
@@ -48,14 +70,32 @@ object ScalaAgent {
         |""".stripMargin
   }
 
-  def singleRequest(query: String, log: Logger)(using
+  def singleRequest(
+      query: String,
+      log: Logger,
+      contextWindow: Int,
+      keepAlive: String,
+      cancellationToken: CancellationToken = CancellationToken.Never
+  )(using
       ExecutionContext
-  ): Future[Result[Seq[ScalaResolvedChunk], String]] =
-    singleRequest(Vector(OllamaClient.ChatMessage.user(query)), log)
+  ): Future[Result[AgentResponse, String]] =
+    singleRequest(
+      Vector(OllamaClient.ChatMessage.user(query)),
+      log,
+      contextWindow,
+      keepAlive,
+      cancellationToken
+    )
 
-  def singleRequest(history: Seq[OllamaClient.ChatMessage], log: Logger)(using
+  def singleRequest(
+      history: Seq[OllamaClient.ChatMessage],
+      log: Logger,
+      contextWindow: Int,
+      keepAlive: String,
+      cancellationToken: CancellationToken
+  )(using
       ExecutionContext
-  ): Future[Result[Seq[ScalaResolvedChunk], String]] = {
+  ): Future[Result[AgentResponse, String]] = {
     val tool = OllamaClient.toolsDef[ScalaToolCall](
       "run_scala_code",
       """Execute a Scala expression.
@@ -67,17 +107,17 @@ object ScalaAgent {
     )
     Console.err.println(s"${Console.MAGENTA}[DEBUG] System Prompt:\n$SystemPrompt${Console.RESET}")
     val request = OllamaClient.request(
-      // model = "qwen3.5:35b-a3b-coding-nvfp4",
-      model = "qwen3.6:35b-a3b-coding-nvfp4",
+      model = Model,
       messages = OllamaClient.ChatMessage.system(SystemPrompt) +: history,
       tools = tool.tools,
-      toolParsers = tool.toolParsers
+      toolParsers = tool.toolParsers,
+      contextWindow = contextWindow,
+      keepAlive = keepAlive,
+      cancellationToken = cancellationToken
     )
     val chunks = Promise[
       (
-          collected: Result[Seq[
-            (Int, Chunk[(universe: String, scala_code: String)])
-          ], String],
+          collected: Result[RawAgentResponse, String],
           scalaCommands: Map[Int, Promise[ScalaToolResult]]
       )
     ]()
@@ -155,13 +195,20 @@ object ScalaAgent {
         }
         collected.add((chunkId, chunk))
 
-      override def onComplete(finalState: ChunkOutputState & ChunkFinalState): Unit =
+      override def onComplete(
+          finalState: ChunkOutputState & ChunkFinalState,
+          usage: OllamaClient.Usage
+      ): Unit =
         if seenAny.get() then log.print("\n")
         chunks.success(
           finalState match
             case ChunkOutputState.Done =>
-              (Result.Ok(collected.asScala.toVector), scalaCommands.asScala.toMap)
-            case ChunkOutputState.Error(msg) => (Result.Err(msg), scalaCommands.asScala.toMap)
+              (
+                Result.Ok(RawAgentResponse(collected.asScala.toVector, usage)),
+                scalaCommands.asScala.toMap
+              )
+            case ChunkOutputState.Error(msg) =>
+              (Result.Err(msg), scalaCommands.asScala.toMap)
         )
     }
     Future
@@ -175,21 +222,25 @@ object ScalaAgent {
             for
               cs <- chunks.future
               results <- Future.sequence(cs.scalaCommands.map((k, p) => p.future.map(r => (k, r))))
-            yield cs.collected.map({ ress =>
-              ress.map({ (id, chunk) =>
-                chunk match
-                  case Chunk.Content(content)   => ResolvedChunk.Content(content)
-                  case Chunk.Thinking(thinking) => ResolvedChunk.Thinking(thinking)
-                  case Chunk.Tools(tool_calls)  =>
-                    ResolvedChunk.Tools(
-                      tool_calls.zipWithIndex.map { case (tc, idx) =>
-                        (
-                          tc,
-                          results.toMap.getOrElse(id + idx, ScalaToolResult.Failure("No response"))
-                        )
-                      }.toVector
-                    )
-              })
+            yield cs.collected.map({ response =>
+              AgentResponse(
+                response.chunks.map({ (id, chunk) =>
+                  chunk match
+                    case Chunk.Content(content)   => ResolvedChunk.Content(content)
+                    case Chunk.Thinking(thinking) => ResolvedChunk.Thinking(thinking)
+                    case Chunk.Tools(tool_calls)  =>
+                      ResolvedChunk.Tools(
+                        tool_calls.zipWithIndex.map { case (tc, idx) =>
+                          (
+                            tc,
+                            results.toMap
+                              .getOrElse(id + idx, ScalaToolResult.Failure("No response"))
+                          )
+                        }.toVector
+                      )
+                }),
+                response.usage
+              )
             })
           case err: Result.Err[?] => Future.successful(err)
         }
@@ -199,7 +250,7 @@ object ScalaAgent {
   def hasToolCalls(chunks: Seq[ScalaResolvedChunk]): Boolean =
     chunks.exists {
       case ResolvedChunk.Tools(toolCalls) => toolCalls.nonEmpty
-      case _                             => false
+      case _                              => false
     }
 
   def appendCollectedChunks(
