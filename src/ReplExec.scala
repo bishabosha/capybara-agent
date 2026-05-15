@@ -28,6 +28,7 @@ object ReplExec {
       case Failure(error) => ujson.write(ujson.Obj("error" -> error))
 
   private object lock
+  private object compileLock
 
   private object ScalaClassLoader
       extends java.net.URLClassLoader(
@@ -141,11 +142,14 @@ object ReplExec {
     }
 
     def loadSkill(skill: Skill): Result[Unit, String] = task {
-      val sigsRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "sigs.jar"
-      val implRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "impl.jar"
-      loadJar(sigsRelPath, skill).check
-      loadJar(implRelPath, skill).check
-      loadPredef(skill).check
+      if !skill.requiresRuntimeClasspath then ()
+      else {
+        val sigsRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "sigs.jar"
+        val implRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "impl.jar"
+        loadJar(sigsRelPath, skill).check
+        loadJar(implRelPath, skill).check
+        loadPredef(skill).check
+      }
     }
 
     def runExpression(builtins: Skill, skill: Skill, scalaCode: String): Result[String, String] =
@@ -154,7 +158,7 @@ object ReplExec {
         val methodName = s"agentCode_$uuid"
         result {
           loadSkill(builtins).check
-          loadSkill(skill).check
+          if skill.requiresRuntimeClasspath then loadSkill(skill).check
           val _ = step(
             s"""def $methodName() = {
             |${embedString(scalaCode)}
@@ -202,10 +206,19 @@ object ReplExec {
   private val globalSession = new Session(new PrintStream(ReplOutputStream))
 
   def runCode(builtins: Skill, skill: Skill, scalaCode: String): Result[String, String] = try {
+    ensureCompiled(builtins)
+    if skill.requiresRuntimeClasspath then ensureCompiled(skill)
     globalSession.runExpression(builtins, skill, scalaCode)
   } finally {
     ReplOutputStream.clearBuffer()
   }
+
+  def ensureCompiled(skill: Skill): Unit =
+    if skill.requiresRuntimeClasspath then
+      compileLock.synchronized {
+        compileSkill(skill)
+        ()
+      }
 
   def runCodeHarness(builtins: Skill, skill: Skill, scalaCode: String, callId: Int, log: Logger)(
       using ExecutionContext

@@ -54,6 +54,7 @@ object ScalaAgent {
   val skills =
     try Skills.loadAll(skillsDir)
     catch { case _: IllegalArgumentException => Nil }
+  val availableSkills = Skills.Basic +: skills
   val builtinSkill =
     Skills.loadAll(builtinSkillsDir).filter(_.universe == "capybara-builtins").head
   val SystemPrompt = {
@@ -61,12 +62,28 @@ object ScalaAgent {
         |You only have access to the `run_scala_code` tool.
         |All actions requested by the user are executed using this tool.
         |
+        |### Execution Discipline:
+        |
+        |When the user asks for a straightforward calculation, data transformation, or standard-library-only answer, immediately call `run_scala_code` with `universe = "basic"`.
+        |Do not first explain that you will call the tool.
+        |Do not put Scala code in a markdown code block unless the user explicitly asked to see code.
+        |Do not deliberate over algorithm choices for small basic tasks; choose the simplest correct implementation and execute it.
+        |For simple sequence requests, generate exactly the requested amount of data unless the user asks for more.
+        |Treat vague quality words like "optimized", "fast", "clean", or "simple" as preferences, not new requirements, unless the user gives a concrete constraint.
+        |For small bounded outputs, prefer the obvious standard-library implementation and standard numeric type that fits the requested result.
+        |If an ambiguity materially changes the answer, resource usage, or observable behavior, stop and ask one concise clarification question instead of continuing to reason internally.
+        |After a successful tool result, answer with the result and only the minimal explanation needed.
+        |
         |### Available Universes:
         |
-        |The `universe` argument tells the system to load some definitions into the environment.
-        |Each universe expects a calling convention.
+        |The `universe` argument selects the execution context for the code.
+        |Default to `basic` for ordinary computation that only needs the Scala or Java standard library.
+        |Choose `basic` for calculations, string/list/map transformations, JSON-like data shaping with standard collections, date/time arithmetic, sorting, filtering, and similar local reasoning.
+        |Use a skill-specific universe only when the task needs the API described for that universe.
+        |Do not choose a skill-specific universe just because the user mentions a path, filename, URL, or command as plain text; choose it only when you must interact with that external resource.
+        |Each universe expects its own calling convention.
         |
-        |${renderSkills(skills)}
+        |${renderSkills(availableSkills)}
         |""".stripMargin
   }
 
@@ -99,9 +116,11 @@ object ScalaAgent {
     val tool = OllamaClient.toolsDef[ScalaToolCall](
       "run_scala_code",
       """Execute a Scala expression.
-        |The system does not have access to side-effecting operations such as `println` or file I/O
-        |unless explicitly provided by the requested `universe`.
-        |Assume access to scala collections, and error handling capabilities.
+        |For simple standard-library-only requests, call this tool immediately with universe "basic"; do not announce or draft the code in normal assistant text first.
+        |Use universe "basic" for arithmetic, strings, collections, dates, parsing, or other standard-library-only tasks.
+        |The system does not have access to side-effecting operations such as file I/O, network I/O, shell commands, or user-visible `println`
+        |unless explicitly provided by the requested universe.
+        |Return the desired answer as the final expression.
         |The tool will also automatically convert any value computed from the expression into a readable format before returning to the user.
         |""".stripMargin
     )
@@ -168,7 +187,7 @@ object ScalaAgent {
               val callId = commandCounter.incrementAndGet()
               scalaCommands.put(callId, promise)
               promise.tryCompleteWith {
-                skills.find(_.universe == scalaCode.arguments.universe) match
+                availableSkills.find(_.universe == scalaCode.arguments.universe) match
                   case Some(skill) =>
                     ReplExec.runCodeHarness(
                       builtinSkill,
@@ -211,40 +230,33 @@ object ScalaAgent {
               (Result.Err(msg), scalaCommands.asScala.toMap)
         )
     }
-    Future
-      .sequence(
-        (builtinSkill +: skills)
-          .map(skill => Future { scala.concurrent.blocking(ReplExec.compileSkill(skill)) })
-      )
-      .flatMap(_ =>
-        request.send(chunker).flatMap {
-          case Result.Ok(_) =>
-            for
-              cs <- chunks.future
-              results <- Future.sequence(cs.scalaCommands.map((k, p) => p.future.map(r => (k, r))))
-            yield cs.collected.map({ response =>
-              AgentResponse(
-                response.chunks.map({ (id, chunk) =>
-                  chunk match
-                    case Chunk.Content(content)   => ResolvedChunk.Content(content)
-                    case Chunk.Thinking(thinking) => ResolvedChunk.Thinking(thinking)
-                    case Chunk.Tools(tool_calls)  =>
-                      ResolvedChunk.Tools(
-                        tool_calls.zipWithIndex.map { case (tc, idx) =>
-                          (
-                            tc,
-                            results.toMap
-                              .getOrElse(id + idx, ScalaToolResult.Failure("No response"))
-                          )
-                        }.toVector
+    request.send(chunker).flatMap {
+      case Result.Ok(_) =>
+        for
+          cs <- chunks.future
+          results <- Future.sequence(cs.scalaCommands.map((k, p) => p.future.map(r => (k, r))))
+        yield cs.collected.map({ response =>
+          AgentResponse(
+            response.chunks.map({ (id, chunk) =>
+              chunk match
+                case Chunk.Content(content)   => ResolvedChunk.Content(content)
+                case Chunk.Thinking(thinking) => ResolvedChunk.Thinking(thinking)
+                case Chunk.Tools(tool_calls)  =>
+                  ResolvedChunk.Tools(
+                    tool_calls.zipWithIndex.map { case (tc, idx) =>
+                      (
+                        tc,
+                        results.toMap
+                          .getOrElse(id + idx, ScalaToolResult.Failure("No response"))
                       )
-                }),
-                response.usage
-              )
-            })
-          case err: Result.Err[?] => Future.successful(err)
-        }
-      )
+                    }.toVector
+                  )
+            }),
+            response.usage
+          )
+        })
+      case err: Result.Err[?] => Future.successful(err)
+    }
   }
 
   def hasToolCalls(chunks: Seq[ScalaResolvedChunk]): Boolean =
