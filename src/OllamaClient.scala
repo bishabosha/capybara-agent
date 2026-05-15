@@ -26,6 +26,45 @@ object OllamaClient {
   object Usage:
     val Empty: Usage = Usage()
 
+  final case class SamplingOptions(
+      temperature: Double,
+      topK: Int,
+      topP: Double,
+      minP: Double,
+      repeatPenalty: Double
+  ):
+    def asJson(contextWindow: Int): ujson.Obj =
+      ujson.Obj(
+        "num_ctx" -> contextWindow,
+        "temperature" -> temperature,
+        "top_k" -> topK,
+        "top_p" -> topP,
+        "min_p" -> minP,
+        "repeat_penalty" -> repeatPenalty
+      )
+
+  object SamplingOptions:
+    val Direct: SamplingOptions =
+      SamplingOptions(
+        temperature = 0.2,
+        topK = 20,
+        topP = 0.9,
+        minP = 0.0,
+        repeatPenalty = 1.1
+      )
+
+    val Thinking: SamplingOptions =
+      SamplingOptions(
+        temperature = 0.4,
+        topK = 40,
+        topP = 0.9,
+        minP = 0.05,
+        repeatPenalty = 1.15
+      )
+
+    def forThinking(think: Boolean): SamplingOptions =
+      if think then Thinking else Direct
+
   inline def toolsDef[T: {ReadWriter, Mirror.Of}](name: String, description: String) =
     given JsonSchema[T] = JsonSchema.derived[T]
     val schema = upickle.jsonschema.schema(upickle.default)[T]
@@ -280,16 +319,18 @@ object OllamaClient {
       contextWindow: Int,
       keepAlive: String,
       think: Boolean,
+      samplingOptions: Option[SamplingOptions] = None,
       cancellationToken: CancellationToken = CancellationToken.Never
   ): ChunkRequest[Chunk[T]] = {
     val output = new ChunkOutput[Chunk[T]]()
+    val effectiveSamplingOptions = samplingOptions.getOrElse(SamplingOptions.forThinking(think))
     val bodyObj =
       (
         model = model,
         messages = messages.map(_.json),
         tools = tools,
         think = think,
-        options = (num_ctx = contextWindow),
+        options = effectiveSamplingOptions.asJson(contextWindow),
         keep_alive = keepAlive
       )
     val req = quickRequest
