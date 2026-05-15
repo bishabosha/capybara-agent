@@ -36,8 +36,10 @@ object Skills {
       code = "",
       api = """No additional bindings are preloaded.
         |Write a Scala expression or block directly; the final expression is returned.
+        |Use little or no internal reasoning for this universe.
         |Keep code short and direct for simple tasks; avoid helper methods unless they materially clarify the computation.
         |When a vague optimization preference is given for a small bounded task, use the straightforward efficient approach; do not debate numeric representation unless it affects the requested result.
+        |Do not mention whether standard library or Predef methods are available before calling the tool.
         |Do not call `println`; the tool prints the final expression automatically.
         |Example `scala_code`: `List(1, 2, 3).sum`
         |""".stripMargin,

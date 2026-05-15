@@ -279,6 +279,7 @@ object OllamaClient {
       toolParsers: Map[String, ReadWriter[T]],
       contextWindow: Int,
       keepAlive: String,
+      think: Boolean,
       cancellationToken: CancellationToken = CancellationToken.Never
   ): ChunkRequest[Chunk[T]] = {
     val output = new ChunkOutput[Chunk[T]]()
@@ -287,6 +288,7 @@ object OllamaClient {
         model = model,
         messages = messages.map(_.json),
         tools = tools,
+        think = think,
         options = (num_ctx = contextWindow),
         keep_alive = keepAlive
       )

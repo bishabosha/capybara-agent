@@ -14,11 +14,20 @@ def main(query: Option[String]) =
   val contextWindow = ScalaAgent.configuredContextWindow
   val keepAlive = ScalaAgent.configuredKeepAlive
   val usageTracker = UsageTracker(Some(contextWindow))
+  val defaultThinkingMode = ScalaAgent.ThinkingMode.Auto
   query match
     case Some(q) =>
       given Logger = Logger.ConsoleLogger
       awaitAll(
-        runSession(q, Vector.empty, usageTracker, contextWindow, keepAlive, CancellationToken.Never)
+        runSession(
+          q,
+          Vector.empty,
+          usageTracker,
+          contextWindow,
+          keepAlive,
+          defaultThinkingMode,
+          CancellationToken.Never
+        )
           .map(printErrorIfNeeded)
       )
     case None =>
@@ -27,11 +36,25 @@ def main(query: Option[String]) =
       val activeRun = AtomicLong(0)
       val activeToken =
         AtomicReference[CancellationToken | Null](null)
+      val thinkingMode =
+        AtomicReference[ScalaAgent.ThinkingMode](defaultThinkingMode)
       Terminal.run { query =>
         val logger = summon[Logger]
         query.trim match
           case "/usage" =>
             logger.print(usageTracker.render)
+          case "/sys-prompt" =>
+            logger.print(s"${ScalaAgent.SystemPrompt}\n")
+          case "/think" =>
+            logger.print(s"thinking mode: ${thinkingMode.get().displayName}\n")
+          case command if command.startsWith("/think ") =>
+            val rawMode = command.stripPrefix("/think").trim
+            ScalaAgent.ThinkingMode.parse(rawMode) match
+              case Some(mode) =>
+                thinkingMode.set(mode)
+                logger.print(s"thinking mode: ${mode.displayName}\n")
+              case None =>
+                logger.print("usage: /think on | /think off | /think auto\n")
           case _ =>
             val previous = activeToken.getAndSet(null)
             if previous != null then
@@ -42,9 +65,11 @@ def main(query: Option[String]) =
             val token = CancellationToken()
             activeToken.set(token)
             val startingHistory = chatHistory.get()
-            printThinking()(using logger)
+            val mode = thinkingMode.get()
+            val think = ScalaAgent.shouldThink(query, mode)
+            printThinking(mode, think)(using logger)
 
-            runSession(query, startingHistory, usageTracker, contextWindow, keepAlive, token)
+            runSession(query, startingHistory, usageTracker, contextWindow, keepAlive, mode, token)
               .foreach { result =>
                 val isCurrent = activeRun.get() == runId && !token.isCancelled
                 if isCurrent then
@@ -68,16 +93,19 @@ def runSession(
     usageTracker: UsageTracker,
     contextWindow: Int,
     keepAlive: String,
+    thinkingMode: ScalaAgent.ThinkingMode,
     cancellationToken: CancellationToken
 )(using
     Logger
 ): Future[Result[Vector[OllamaClient.ChatMessage], String]] =
+  val think = ScalaAgent.shouldThink(query, thinkingMode)
   continueSession(
     history :+ OllamaClient.ChatMessage.user(query),
     0,
     usageTracker,
     contextWindow,
     keepAlive,
+    think,
     cancellationToken
   )
 
@@ -87,6 +115,7 @@ private def continueSession(
     usageTracker: UsageTracker,
     contextWindow: Int,
     keepAlive: String,
+    think: Boolean,
     cancellationToken: CancellationToken
 )(using Logger): Future[Result[Vector[OllamaClient.ChatMessage], String]] =
   if cancellationToken.isCancelled then Future.successful(Result.Err("cancelled"))
@@ -94,7 +123,7 @@ private def continueSession(
     Future.successful(Result.Err(s"agent loop exceeded $MaxAgentRequests model requests"))
   else
     ScalaAgent
-      .singleRequest(history, summon[Logger], contextWindow, keepAlive, cancellationToken)
+      .singleRequest(history, summon[Logger], contextWindow, keepAlive, think, cancellationToken)
       .flatMap {
         case Result.Ok(response) =>
           usageTracker.record(response.usage)
@@ -106,6 +135,7 @@ private def continueSession(
               usageTracker,
               contextWindow,
               keepAlive,
+              think,
               cancellationToken
             )
           else Future.successful(Result.Ok(updatedHistory))
@@ -127,8 +157,11 @@ private def printReadyForNextTurn()(using Logger): Unit =
   summon[Logger].setStatus(None)
   summon[Logger].print(s"${Console.GREEN}[your turn]${Console.RESET}\n")
 
-private def printThinking()(using Logger): Unit =
-  summon[Logger].setStatus(Some(s"${Console.CYAN}[thinking...]${Console.RESET}"))
+private def printThinking(mode: ScalaAgent.ThinkingMode, think: Boolean)(using Logger): Unit =
+  val status =
+    if think then s"[thinking enabled, mode=${mode.displayName}]"
+    else s"[thinking disabled, mode=${mode.displayName}]"
+  summon[Logger].setStatus(Some(s"${Console.CYAN}$status${Console.RESET}"))
 
 @main def run(args: String*): Unit =
   val _ = mainargs.ParserForMethods(this).runOrExit(args)

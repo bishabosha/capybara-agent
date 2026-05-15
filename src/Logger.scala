@@ -26,9 +26,13 @@ object Logger:
     private val pendingOutput = StringBuilder()
     private var activeStyle = ""
     private var statusLine = Option.empty[String]
+    private var transientStatus = Option.empty[String]
+    private var transientStatusVisible = false
 
     private def printAboveClean(message: String): Unit =
+      clearTransientStatus()
       reader.printAbove(resetWrapped(message))
+      drawTransientStatus()
 
     override def prompt(basePrompt: String): String = this.synchronized {
       statusLine match
@@ -36,15 +40,41 @@ object Logger:
         case None          => basePrompt
     }
 
+    private def promptText: String =
+      statusLine match
+        case Some(message) => s"${Console.RESET}$message${Console.RESET}\n$basePrompt"
+        case None          => basePrompt
+
     private def redrawPrompt(): Unit =
+      val nextPrompt = promptText
+      reader match
+        case impl: LineReaderImpl =>
+          impl.setPrompt(nextPrompt)
+          reader.callWidget(LineReader.REDISPLAY)
+        case _ => ()
+
+    private def setStoredPrompt(): Unit =
       val nextPrompt = statusLine match
         case Some(message) => s"${Console.RESET}$message${Console.RESET}\n$basePrompt"
         case None          => basePrompt
       reader match
         case impl: LineReaderImpl =>
           impl.setPrompt(nextPrompt)
-          if reader.isReading then reader.callWidget(LineReader.REDISPLAY)
         case _ => ()
+
+    private def renderStatus(message: String): String =
+      s"${Console.RESET}$message${Console.RESET}"
+
+    private def clearTransientStatus(): Unit =
+      if transientStatusVisible then
+        ps.print("\r\u001b[2K")
+        transientStatusVisible = false
+
+    private def drawTransientStatus(): Unit =
+      transientStatus.foreach { message =>
+        ps.print(s"\r${renderStatus(message)}")
+        transientStatusVisible = true
+      }
 
     private def resetWrapped(message: String): String =
       val lineEnding =
@@ -96,7 +126,16 @@ object Logger:
     def print(message: String): Unit = appendPrinted(message)
     def flush(): Unit = flushToWriter()
     override def setStatus(message: Option[String]): Unit = this.synchronized {
-      statusLine = message
-      redrawPrompt()
+      clearTransientStatus()
+      val isReading = reader.isReading
+      if isReading then
+        transientStatus = None
+        statusLine = message
+        redrawPrompt()
+      else
+        statusLine = None
+        transientStatus = message
+        setStoredPrompt()
+        drawTransientStatus()
       ps.flush()
     }
