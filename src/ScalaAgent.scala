@@ -34,77 +34,6 @@ object ScalaAgent {
   private val ContextWindowEnv = "CAPYBARA_CONTEXT_WINDOW"
   private val KeepAliveEnv = "CAPYBARA_KEEP_ALIVE"
 
-  enum ThinkingMode:
-    case On, Off, Auto
-
-    def displayName: String =
-      this match
-        case On   => "on"
-        case Off  => "off"
-        case Auto => "auto"
-
-  object ThinkingMode:
-    def parse(value: String): Option[ThinkingMode] =
-      value.trim.toLowerCase match
-        case "on" | "true" | "yes"     => Some(On)
-        case "off" | "false" | "no"    => Some(Off)
-        case "auto" | "automatic" | "" => Some(Auto)
-        case _                         => None
-
-  def shouldThink(query: String, mode: ThinkingMode): Boolean =
-    mode match
-      case ThinkingMode.On   => true
-      case ThinkingMode.Off  => false
-      case ThinkingMode.Auto =>
-        val q = query.toLowerCase
-        def hasAny(words: String*): Boolean =
-          words.exists(q.contains)
-
-        val explicitOff =
-          hasAny("don't think", "dont think", "no thinking", "think off", "quick", "just ")
-        val explicitOn =
-          hasAny(
-            "think carefully",
-            "reason through",
-            "analyze",
-            "analyse",
-            "debug",
-            "design",
-            "architecture",
-            "tradeoff",
-            "trade-off"
-          )
-        val likelyBasic =
-          hasAny(
-            "calculate",
-            "convert",
-            "format",
-            "sort",
-            "sum",
-            "list"
-          )
-        val likelyComplex =
-          hasAny(
-            "why",
-            "fix",
-            "failing",
-            "failed",
-            "error",
-            "exception",
-            "refactor",
-            "implement",
-            "multiple files",
-            "across files",
-            "codebase",
-            "root cause",
-            "test failure"
-          ) || q.length > 500
-
-        if explicitOff then false
-        else if explicitOn then true
-        else if likelyBasic && !likelyComplex then false
-        else likelyComplex
-
   def configuredContextWindow: Int =
     sys.env
       .get(ContextWindowEnv)
@@ -257,21 +186,24 @@ object ScalaAgent {
         ((System.nanoTime() - startedAtNanos) / 1_000_000_000L).max(0L)
 
       private def updateStatus(label: String, force: Boolean = false): Unit =
-        val now = System.nanoTime()
-        val previous = lastStatusAtNanos.get()
-        if !force && previous != 0L && now - previous < 250_000_000L then ()
-        else if lastStatusAtNanos.compareAndSet(previous, now) || force then
-          val chunks = receivedChunks.get()
-          val tokens = estimatedTokens(receivedChars.get())
-          val pendingTools = outstandingToolPromises.get()
-          val toolStatus =
-            if pendingTools == 0 then ""
-            else s", $pendingTools tool promises pending"
-          log.setStatus(
-            Some(
-              s"${Console.CYAN}[$label: $chunks chunks, ~$tokens tokens$toolStatus, ${elapsedSeconds}s]${Console.RESET}"
+        if cancellationToken.isCancelled then ()
+        else
+          val now = System.nanoTime()
+          val previous = lastStatusAtNanos.get()
+          if !force && previous != 0L && now - previous < 250_000_000L then ()
+          else if lastStatusAtNanos.compareAndSet(previous, now) || force then
+            val chunks = receivedChunks.get()
+            val tokens = estimatedTokens(receivedChars.get())
+            val pendingTools = outstandingToolPromises.get()
+            val toolStatus =
+              if pendingTools == 0 then ""
+              else s", $pendingTools tool promises pending"
+            val heapStatus = RuntimeStatus.heapStatus
+            log.setStatus(
+              Some(
+                s"${Console.CYAN}[$label: $chunks chunks, ~$tokens tokens$toolStatus, ${elapsedSeconds}s, $heapStatus]${Console.RESET}"
+              )
             )
-          )
 
       private def recordChunk(label: String, chars: Int): Unit =
         val chunks = receivedChunks.incrementAndGet()
@@ -325,7 +257,8 @@ object ScalaAgent {
                         skill,
                         scalaCode.arguments.scala_code,
                         callId,
-                        log
+                        log,
+                        cancellationToken
                       )
                   case None =>
                     Future.successful(

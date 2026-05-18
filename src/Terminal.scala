@@ -46,7 +46,7 @@ object Terminal {
       if nextState == NextState.Continue then loop()
 
     terminal.writer.println(
-      "Type something. Type a new line while the agent is responding to interrupt. Type ':q' to quit. Type '/usage' for token stats. Type '/sys-prompt' to print the system prompt. Type '/think on|off|auto' to set thinking mode."
+      "Type something. Type '/x' to interrupt the current run. Type ':q' to quit. Type '/usage' for token stats. Type '/sys-prompt' to print the system prompt. Type '/think on|off|auto' to set thinking mode."
     )
     Using.resource(Logger.TerminalLogger(reader, terminal.writer, Prompt)) { logger =>
       loop()(using logger)

@@ -14,7 +14,7 @@ def main(query: Option[String]) =
   val contextWindow = ScalaAgent.configuredContextWindow
   val keepAlive = ScalaAgent.configuredKeepAlive
   val usageTracker = UsageTracker(Some(contextWindow))
-  val defaultThinkingMode = ScalaAgent.ThinkingMode.Auto
+  val defaultThinkingMode = ThinkingInference.ThinkingMode.Auto
   query match
     case Some(q) =>
       given Logger = Logger.ConsoleLogger
@@ -37,10 +37,18 @@ def main(query: Option[String]) =
       val activeToken =
         AtomicReference[CancellationToken | Null](null)
       val thinkingMode =
-        AtomicReference[ScalaAgent.ThinkingMode](defaultThinkingMode)
+        AtomicReference[ThinkingInference.ThinkingMode](defaultThinkingMode)
       Terminal.run { query =>
         val logger = summon[Logger]
         query.trim match
+          case "/x" =>
+            val previous = activeToken.getAndSet(null)
+            if previous != null then previous.cancel()
+            val replInterrupted = ReplExec.interruptActiveExecution()
+            if previous != null || replInterrupted then
+              logger.print("\n[interrupt requested]\n")
+              printReadyForNextTurn()(using logger)
+            else logger.print("[nothing to interrupt]\n")
           case "/usage" =>
             logger.print(usageTracker.render)
           case "/sys-prompt" =>
@@ -49,7 +57,7 @@ def main(query: Option[String]) =
             logger.print(s"thinking mode: ${thinkingMode.get().displayName}\n")
           case command if command.startsWith("/think ") =>
             val rawMode = command.stripPrefix("/think").trim
-            ScalaAgent.ThinkingMode.parse(rawMode) match
+            ThinkingInference.ThinkingMode.parse(rawMode) match
               case Some(mode) =>
                 thinkingMode.set(mode)
                 logger.print(s"thinking mode: ${mode.displayName}\n")
@@ -59,6 +67,7 @@ def main(query: Option[String]) =
             val previous = activeToken.getAndSet(null)
             if previous != null then
               previous.cancel()
+              val _ = ReplExec.interruptActiveExecution()
               logger.print("\n[interrupted]\n")
 
             val runId = activeRun.incrementAndGet()
@@ -66,14 +75,14 @@ def main(query: Option[String]) =
             activeToken.set(token)
             val startingHistory = chatHistory.get()
             val mode = thinkingMode.get()
-            val think = ScalaAgent.shouldThink(query, mode)
+            val think = ThinkingInference.shouldThink(query, mode)
             printThinking(mode, think)(using logger)
 
             runSession(query, startingHistory, usageTracker, contextWindow, keepAlive, mode, token)
               .foreach { result =>
                 val isCurrent = activeRun.get() == runId && !token.isCancelled
                 if isCurrent then
-                  activeToken.compareAndSet(token, null)
+                  val _ = activeToken.compareAndSet(token, null)
                   result match
                     case Result.Ok(updatedHistory) =>
                       chatHistory.set(updatedHistory)
@@ -93,12 +102,12 @@ def runSession(
     usageTracker: UsageTracker,
     contextWindow: Int,
     keepAlive: String,
-    thinkingMode: ScalaAgent.ThinkingMode,
+    thinkingMode: ThinkingInference.ThinkingMode,
     cancellationToken: CancellationToken
 )(using
     Logger
 ): Future[Result[Vector[OllamaClient.ChatMessage], String]] =
-  val think = ScalaAgent.shouldThink(query, thinkingMode)
+  val think = ThinkingInference.shouldThink(query, thinkingMode)
   continueSession(
     history :+ OllamaClient.ChatMessage.user(query),
     0,
@@ -157,7 +166,9 @@ private def printReadyForNextTurn()(using Logger): Unit =
   summon[Logger].setStatus(None)
   summon[Logger].print(s"${Console.GREEN}[your turn]${Console.RESET}\n")
 
-private def printThinking(mode: ScalaAgent.ThinkingMode, think: Boolean)(using Logger): Unit =
+private def printThinking(mode: ThinkingInference.ThinkingMode, think: Boolean)(using
+    Logger
+): Unit =
   val status =
     if think then s"[thinking enabled, mode=${mode.displayName}]"
     else s"[thinking disabled, mode=${mode.displayName}]"

@@ -1,10 +1,13 @@
 package capybara.agent
 
 import dotty.tools.repl.ReplDriver
+import dotty.tools.repl.ReplBytecodeInstrumentation.setStopFlag
 import java.net.URL
 import java.net.URLClassLoader
 import java.nio.file.Paths
 import java.io.PrintStream
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicReference
 import dotty.tools.repl.State
 import steps.result.Result, Result.eval.{raise, ok, check}
 import steps.result.Result.apply as result
@@ -21,14 +24,29 @@ object ReplExec {
 
   enum ScalaToolResult:
     case Success(value: ujson.Value)
-    case Failure(error: String)
+    case Failure(error: ujson.Value)
 
     def encodeAsJson: String = this match
-      case Success(value) => ujson.write(ujson.Obj("value" -> value))
-      case Failure(error) => ujson.write(ujson.Obj("error" -> error))
+      case Success(value) => ujson.write(ujson.Obj("successValue" -> value))
+      case Failure(error) => ujson.write(ujson.Obj("executionError" -> error))
 
   private object lock
   private object compileLock
+  private final class ActiveReplExecution(val thread: Thread):
+    private val classLoaders = ConcurrentLinkedQueue[ClassLoader]()
+
+    def addClassLoader(classLoader: ClassLoader): Unit =
+      if !classLoaders.contains(classLoader) then classLoaders.add(classLoader)
+
+    def foreachClassLoader(op: ClassLoader => Unit): Unit =
+      val iterator = classLoaders.iterator()
+      while iterator.hasNext do op(iterator.next())
+
+  private final case class TrackedReplExecution(
+      execution: ActiveReplExecution,
+      closeable: AutoCloseable
+  ) extends AutoCloseable:
+    def close(): Unit = closeable.close()
 
   private object ScalaClassLoader
       extends java.net.URLClassLoader(
@@ -36,10 +54,7 @@ object ReplExec {
           sys
             .props("java.class.path")
             .split(java.io.File.pathSeparator)
-            .filter(p =>
-              p.contains("/org/scala-lang/scala-library/")
-                || p.contains("/org/scala-lang/scala3-library_3/")
-            )
+            .filter(p => p.contains("/org/scala-lang/scala-library/"))
             .map(path => Paths.get(path).toUri.toURL)
         },
         ClassLoader.getSystemClassLoader.getParent
@@ -52,6 +67,7 @@ object ReplExec {
           "-classpath",
           ScalaClassLoader.getURLs.map(_.toURI().getPath()).mkString(":"),
           "-language:experimental.safe",
+          "-Xrepl-interrupt-instrumentation:true",
           "-color:never"
         ),
         out = ps,
@@ -60,6 +76,55 @@ object ReplExec {
       ) {
 
     var state = initialState
+    private val activeExecution = AtomicReference[ActiveReplExecution | Null](null)
+
+    private def currentReplClassLoader(using state: State): ClassLoader =
+      rendering.getClass
+        .getMethods()
+        .find(method => method.getName == "classLoader" && method.getParameterCount == 1)
+        .map(_.invoke(rendering, state.context).asInstanceOf[ClassLoader])
+        .getOrElse(throw IllegalStateException("Could not access REPL class loader"))
+
+    private def interruptExecution(execution: ActiveReplExecution): Unit =
+      execution.foreachClassLoader { classLoader =>
+        setStopFlag(classLoader, b = true)
+      }
+      execution.thread.interrupt()
+
+    def interruptActiveExecution(): Boolean =
+      activeExecution.get() match
+        case null      => false
+        case execution =>
+          interruptExecution(execution)
+          true
+
+    private def trackExecution(cancellationToken: CancellationToken): TrackedReplExecution =
+      given State = state
+      val execution = ActiveReplExecution(Thread.currentThread())
+      registerCurrentClassLoader(execution)
+      activeExecution.set(execution)
+      val cancellationRegistration = cancellationToken.onCancel {
+        interruptExecution(execution)
+      }
+      TrackedReplExecution(
+        execution,
+        new AutoCloseable:
+          def close(): Unit =
+            cancellationRegistration.close()
+            val _ = activeExecution.compareAndSet(execution, null)
+            execution.foreachClassLoader { classLoader =>
+              setStopFlag(classLoader, b = false)
+            }
+            if Thread.currentThread() == execution.thread then
+              val _ = Thread.interrupted()
+            ()
+      )
+
+    private def registerCurrentClassLoader(execution: ActiveReplExecution): Unit =
+      given State = state
+      val classLoader = currentReplClassLoader
+      setStopFlag(classLoader, b = false)
+      execution.addClassLoader(classLoader)
 
     def runWithState(code: String): Unit =
       given State = state
@@ -152,26 +217,41 @@ object ReplExec {
       }
     }
 
-    def runExpression(builtins: Skill, skill: Skill, scalaCode: String): Result[String, String] =
-      stateless {
-        val uuid = java.util.UUID.randomUUID().toString.replaceAll("-", "_")
-        val methodName = s"agentCode_$uuid"
-        result {
-          loadSkill(builtins).check
-          if skill.requiresRuntimeClasspath then loadSkill(skill).check
-          val _ = step(
-            s"""def $methodName() = {
-            |${embedString(scalaCode)}
-            |}
-            |""".stripMargin,
-            s"while compiling agent generated code for universe `${skill.universe}`."
-          ).ok
-          step(
-            s"""builtins.builtinPrintAndFormatData($methodName())""",
-            s"while running agent generated code for universe `${skill.universe}`."
-          ).ok
+    def runExpression(
+        builtins: Skill,
+        skill: Skill,
+        scalaCode: String,
+        cancellationToken: CancellationToken
+    ): Result[String, String] =
+      if cancellationToken.isCancelled then Result.Err("cancelled")
+      else
+        stateless {
+          val uuid = java.util.UUID.randomUUID().toString.replaceAll("-", "_")
+          val methodName = s"agentCode_$uuid"
+          val trackedExecution = trackExecution(cancellationToken)
+          try
+            result {
+              loadSkill(builtins).check
+              if skill.requiresRuntimeClasspath then loadSkill(skill).check
+              registerCurrentClassLoader(trackedExecution.execution)
+              if cancellationToken.isCancelled then raise("cancelled")
+              val _ = step(
+                s"""def $methodName() = {
+                  |${embedString(scalaCode)}
+                  |}
+                  |""".stripMargin,
+                s"while compiling agent generated code for universe `${skill.universe}`."
+              ).ok
+              if cancellationToken.isCancelled then raise("cancelled")
+              val output = step(
+                s"""builtins.evaluateAndPrintFormatted($methodName())""",
+                s"while running agent generated code for universe `${skill.universe}`."
+              ).ok
+              if cancellationToken.isCancelled then raise("cancelled")
+              output
+            }
+          finally trackedExecution.close()
         }
-      }
 
     def stateless[T](op: => T): T = lock.synchronized {
       try op
@@ -205,10 +285,18 @@ object ReplExec {
 
   private val globalSession = new Session(new PrintStream(ReplOutputStream))
 
-  def runCode(builtins: Skill, skill: Skill, scalaCode: String): Result[String, String] = try {
+  def interruptActiveExecution(): Boolean =
+    globalSession.interruptActiveExecution()
+
+  def runCode(
+      builtins: Skill,
+      skill: Skill,
+      scalaCode: String,
+      cancellationToken: CancellationToken = CancellationToken.Never
+  ): Result[String, String] = try {
     ensureCompiled(builtins)
     if skill.requiresRuntimeClasspath then ensureCompiled(skill)
-    globalSession.runExpression(builtins, skill, scalaCode)
+    globalSession.runExpression(builtins, skill, scalaCode, cancellationToken)
   } finally {
     ReplOutputStream.clearBuffer()
   }
@@ -216,18 +304,34 @@ object ReplExec {
   def ensureCompiled(skill: Skill): Unit =
     if skill.requiresRuntimeClasspath then
       compileLock.synchronized {
-        compileSkill(skill)
+        val _ = compileSkill(skill)
         ()
       }
 
-  def runCodeHarness(builtins: Skill, skill: Skill, scalaCode: String, callId: Int, log: Logger)(
-      using ExecutionContext
+  def runCodeHarness(
+      builtins: Skill,
+      skill: Skill,
+      scalaCode: String,
+      callId: Int,
+      log: Logger,
+      cancellationToken: CancellationToken = CancellationToken.Never
+  )(using
+      ExecutionContext
   ): Future[ScalaToolResult] =
     def strippedAnsi(str: String): String =
       str.replaceAll("\u001B\\[[;\\d]*m", "")
     Future[Result[String, String]] {
       scala.concurrent.blocking {
-        runCode(builtins, skill, scalaCode)
+        if cancellationToken.isCancelled then Result.Err("cancelled")
+        else
+          val monitor =
+            RuntimeStatus.monitor(
+              log,
+              s"running tool #$callId",
+              shouldUpdate = () => !cancellationToken.isCancelled
+            )
+          try runCode(builtins, skill, scalaCode, cancellationToken)
+          finally monitor.close()
       }
     }.transform({ try0 =>
       val normalized = try0 match
@@ -235,12 +339,20 @@ object ReplExec {
           res match
             case Result.Ok(value) =>
               try
-                val data = ujson.read(strippedAnsi(value))
-                ScalaToolResult.Success(data)
+                val data = ujson.read(value)
+                data.obj.get("special.success") match
+                  case Some(successValue) =>
+                    ScalaToolResult.Success(successValue)
+                  case None =>
+                    data.obj.get("special.error") match
+                      case Some(errorValue) =>
+                        ScalaToolResult.Failure(errorValue)
+                      case None =>
+                        ScalaToolResult.Success(data)
               catch
                 case err: Exception =>
                   ScalaToolResult.Failure(
-                    s"Failed to parse output as JSON: ${strippedAnsi(value)}. Error: ${err.getMessage}"
+                    s"Failed to parse output as JSON: ${value}. Error: ${err.getMessage}"
                   )
             case Result.Err(error) =>
               ScalaToolResult.Failure(strippedAnsi(error))
@@ -254,9 +366,15 @@ object ReplExec {
             log.print(
               s"${Console.GREEN}Result for code chunk [$callId]:\n---\n${value}${Console.RESET}\n"
             )
-          case ScalaToolResult.Failure(error) =>
+          case ScalaToolResult.Failure(ujson.Str("cancelled")) =>
+            ()
+          case ScalaToolResult.Failure(ujson.Str(error)) =>
             log.print(
               s"${Console.RED}Error executing code chunk [$callId]:\n---\n${error}${Console.RESET}\n"
+            )
+          case ScalaToolResult.Failure(error) =>
+            log.print(
+              s"${Console.RED}Error executing code chunk [$callId]:\n---\n${error.render(indent = 2)}${Console.RESET}\n"
             )
       }
       scala.util.Success(normalized)
