@@ -15,7 +15,8 @@ case class Skill(
     interface: String,
     code: String,
     api: String,
-    predef: Option[String]
+    predef: Option[String],
+    requiresRuntimeClasspath: Boolean = true
 )
 
 case class SkillMd(
@@ -24,6 +25,27 @@ case class SkillMd(
 ) derives YamlDecoder
 
 object Skills {
+
+  val Basic: Skill =
+    Skill(
+      name = "basic",
+      description =
+        "Runs Scala code with only the Scala and Java standard libraries. Use for arithmetic, strings, collections, dates, parsing, and other basic computation that does not need files, network, shell commands, or a skill-specific API.",
+      universe = "basic",
+      interface = "",
+      code = "",
+      api = """No additional bindings are preloaded.
+        |Write a Scala expression or block directly; the final expression is returned.
+        |Use little or no internal reasoning for this universe.
+        |Keep code short and direct for simple tasks; avoid helper methods unless they materially clarify the computation.
+        |When a vague optimization preference is given for a small bounded task, use the straightforward efficient approach; do not debate numeric representation unless it affects the requested result.
+        |Do not mention whether standard library or Predef methods are available before calling the tool.
+        |Do not call `println`; the tool prints the final expression automatically.
+        |Example `scala_code`: `List(1, 2, 3).sum`
+        |""".stripMargin,
+      predef = None,
+      requiresRuntimeClasspath = false
+    )
 
   def parseSkill(content: String): Result[SkillMd, String] =
     content match
@@ -74,16 +96,24 @@ object Skills {
   def renderPrompt(sep: String, skills: Seq[Skill]): String = {
     skills
       .map { skill =>
-        s"""#### ${skill.universe}
-        |${skill.description}
-        |```scala
-        |${skill.interface}
-        |```
-        |before your code is executed, the following preable is inserted beforehand (DO NOT REPEAT THIS IN YOUR CODE):
-        |```scala
-        |${skill.api}
-        |```
-        |""".stripMargin
+        if skill.requiresRuntimeClasspath then
+          s"""#### ${skill.universe}
+          |${skill.description}
+          |```scala
+          |${skill.interface}
+          |```
+          |before your code is executed, the following preamble is inserted beforehand (DO NOT REPEAT THIS IN YOUR CODE):
+          |```scala
+          |${skill.api}
+          |```
+          |""".stripMargin
+        else
+          s"""#### ${skill.universe}
+          |${skill.description}
+          |
+          |${skill.api}
+          |This universe does not compile or load a universe-specific implementation JAR beyond the baseline builtins.
+          |""".stripMargin
       }
       .mkString(sep)
   }
