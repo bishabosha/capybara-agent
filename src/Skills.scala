@@ -25,6 +25,15 @@ case class SkillMd(
 ) derives YamlDecoder
 
 object Skills {
+  private val PreloadedValPattern =
+    raw"^val\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)\s*=\s*\.\.\.\s*$$".r
+
+  private def renderCallingConvention(api: String): String =
+    api.trim match
+      case PreloadedValPattern(bindingName, bindingType) =>
+        s"Preloaded value: `$bindingName` has type `$bindingType`. Use `$bindingName` directly in `scala_code`; do not write a `val $bindingName` declaration, import it, wrap it, or recreate it."
+      case other =>
+        s"Manifest calling convention, shown for reference only and not as code to paste: `$other`"
 
   val Basic: Skill =
     Skill(
@@ -103,10 +112,7 @@ object Skills {
           |```scala
           |${skill.interface}
           |```
-          |Calling convention from the skill manifest. These bindings are already in scope in `scala_code`; use them directly and do not repeat, import, wrap, or reconstruct them:
-          |```scala
-          |${skill.api}
-          |```
+          |${renderCallingConvention(skill.api)}
           |""".stripMargin
         else
           s"""#### ${skill.universe}

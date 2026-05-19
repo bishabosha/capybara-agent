@@ -256,8 +256,20 @@ object OllamaClient {
       lookup: Map[String, ReadWriter[T]]
   ): Result[T, String] =
     lookup.get(name) match
-      case Some(given ReadWriter[t]) => readSafe[t](arguments)
+      case Some(given ReadWriter[t]) => readSafe[t](normalizeToolArguments(name, arguments))
       case None                      => Result.Err("unknown tool name")
+
+  private def normalizeToolArguments(name: String, arguments: ujson.Value): ujson.Value =
+    if name == "run_scala_code" then
+      arguments match
+        case obj: ujson.Obj =>
+          if obj.obj.get("scala_code").isEmpty then
+            obj.obj.get("scalaCode").foreach { value =>
+              obj("scala_code") = value
+            }
+          obj
+        case _ => arguments
+    else arguments
 
   def chunkParser[T](
       line: String,

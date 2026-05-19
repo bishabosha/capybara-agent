@@ -162,6 +162,7 @@ object ScalaAgent {
         |Use universe "basic" for arithmetic, strings, collections, dates, parsing, or other standard-library-only tasks.
         |The system does not have access to side-effecting operations such as file I/O, network I/O, shell commands, or user-visible `println`
         |unless explicitly provided by the requested universe.
+        |Use the exact argument keys `universe` and `scala_code`.
         |Return the desired answer as the final expression.
         |The tool will also automatically convert any value computed from the expression into a readable format before returning to the user.
         |""".stripMargin

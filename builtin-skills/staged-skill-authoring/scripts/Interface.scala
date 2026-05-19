@@ -33,7 +33,8 @@ trait StagedSkillWorkspace extends caps.Mutable {
     */
   update def writeSkillMarkdown(name: String, skillMd: String): SkillChecklist
 
-  /** Write `scripts/Interface.scala`, which must begin with Scala CLI using directives.
+  /** Write `scripts/Interface.scala`, which must begin with Scala CLI using directives
+    * and compile in experimental safe mode.
     *
     * A single `run_scala_code` call may write at most one file. Make this write call
     * the final expression, read the returned checklist, and make a later call for
@@ -45,8 +46,8 @@ trait StagedSkillWorkspace extends caps.Mutable {
   update def writeInterface(name: String, interfaceScala: String): SkillChecklist
 
   /** Write `scripts/Implementation.scala`, which must include `//> using file Interface.scala`
-    * before its package declaration and exactly one public
-    * `@assumeSafe val impl: ExplicitApiInterface = ...`.
+    * before its package declaration, compile against the current `Interface.scala`,
+    * and expose exactly one public `@assumeSafe val impl: ExplicitApiInterface = ...`.
     *
     * A single `run_scala_code` call may write at most one file. Make this write call
     * the final expression, read the returned checklist, and make a later call for

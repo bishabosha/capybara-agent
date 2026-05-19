@@ -234,26 +234,26 @@ object ReplExec {
           try
             result {
               loadSkill(builtins).check
-              if skill.requiresRuntimeClasspath then
-                withSystemProperties(predefSystemProperties) {
+              withSystemProperties(predefSystemProperties) {
+                if skill.requiresRuntimeClasspath then
                   loadSkill(skill).check
-                }
-              registerCurrentClassLoader(trackedExecution.execution)
-              if cancellationToken.isCancelled then raise("cancelled")
-              val _ = step(
-                s"""def $methodName() = {
-                  |${embedString(scalaCode)}
-                  |}
-                  |""".stripMargin,
-                s"while compiling agent generated code for universe `${skill.universe}`."
-              ).ok
-              if cancellationToken.isCancelled then raise("cancelled")
-              val output = step(
-                s"""builtins.evaluateAndPrintFormatted($methodName())""",
-                s"while running agent generated code for universe `${skill.universe}`."
-              ).ok
-              if cancellationToken.isCancelled then raise("cancelled")
-              output
+                registerCurrentClassLoader(trackedExecution.execution)
+                if cancellationToken.isCancelled then raise("cancelled")
+                val _ = step(
+                  s"""def $methodName() = {
+                    |${embedString(scalaCode)}
+                    |}
+                    |""".stripMargin,
+                  s"while compiling agent generated code for universe `${skill.universe}`."
+                ).ok
+                if cancellationToken.isCancelled then raise("cancelled")
+                val output = step(
+                  s"""builtins.evaluateAndPrintFormatted($methodName())""",
+                  s"while running agent generated code for universe `${skill.universe}`."
+                ).ok
+                if cancellationToken.isCancelled then raise("cancelled")
+                output
+              }
             }
           finally trackedExecution.close()
         }

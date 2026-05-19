@@ -39,7 +39,7 @@ Brief workflow instructions for the agent.
 
 ### scripts/Interface.scala
 
-Use `stagedSkills.writeInterface(...)` to create this file. It must begin with Scala CLI using directives before the package declaration.
+Use `stagedSkills.writeInterface(...)` to create this file. It must begin with Scala CLI using directives before the package declaration. The staged workspace validates it by compiling `Interface.scala` in experimental safe mode before writing it.
 
 ```scala
 //> using options -preview
@@ -54,7 +54,7 @@ Keep this file to safe public signatures. Do not expose constructors, root paths
 
 ### scripts/Implementation.scala
 
-Use `stagedSkills.writeImplementation(...)` to create this file. It must include a using directive for the interface file before the package declaration.
+Use `stagedSkills.writeImplementation(...)` to create this file. It must include a using directive for the interface file before the package declaration. The staged workspace validates it by compiling the current `Interface.scala` to a signatures jar, then compiling `Implementation.scala` against that jar before writing it.
 
 ```scala
 //> using file Interface.scala

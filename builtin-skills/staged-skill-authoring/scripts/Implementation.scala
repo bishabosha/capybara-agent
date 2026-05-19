@@ -33,6 +33,7 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
     extends stagedskills.StagedSkillWorkspace
     with caps.Mutable {
   private val cwdPath = JPath.of(".").toAbsolutePath.normalize()
+  private val scalaVersion = "3.9.0-RC1-bin-20260430-a24622b-NIGHTLY"
   private val requiredFiles: Vector[String] =
     Vector(
       "SKILL.md",
@@ -128,6 +129,11 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
       .takeWhile(line => line.startsWith("//> using ") || line.trim.isEmpty)
       .toVector
 
+  private def fileDirectivePrefix(content: String): Vector[String] =
+    content.linesIterator
+      .takeWhile(line => line.startsWith("//> using ") || line.trim.isEmpty)
+      .toVector
+
   private def packageName(content: String): Option[String] =
     content.linesIterator.collectFirst {
       case line if line.trim.startsWith("package ") =>
@@ -191,6 +197,132 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
       throw IllegalArgumentException("Implementation.scala must not expose `object impl`")
     implementationScala
   }
+
+  private def deleteRecursively(path: JPath): Unit =
+    if Files.exists(path, LinkOption.NOFOLLOW_LINKS) then
+      val stream = Files.walk(path)
+      try
+        stream
+          .iterator()
+          .asScala
+          .toSeq
+          .sortBy(_.getNameCount)
+          .reverse
+          .foreach(Files.deleteIfExists)
+      finally stream.close()
+
+  private def runCompiler(args: Seq[String], label: String): Unit = {
+    def strippedAnsi(str: String): String =
+      str.replaceAll("\u001B\\[[;\\d]*m", "")
+    val command = java.util.ArrayList[String]()
+    args.foreach(command.add)
+    val process =
+      java.lang.ProcessBuilder(command).directory(cwdPath.toFile).redirectErrorStream(true).start()
+    val output = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+    val exitCode =
+      try process.waitFor()
+      catch {
+        case _: InterruptedException =>
+          process.destroyForcibly()
+          Thread.currentThread().interrupt()
+          throw IllegalStateException(s"$label was interrupted")
+      }
+    if exitCode != 0 then
+      val trimmedOutput =
+        strippedAnsi(output)
+          .linesIterator
+          .dropWhile(!_.startsWith("Compiling project (Scala"))
+          .mkString("\n")
+      throw IllegalArgumentException(
+        s"""$label failed with exit code $exitCode:
+           |${trimmedOutput}""".stripMargin
+      )
+  }
+
+  private def compileInterfaceToJar(
+      tempDir: JPath,
+      interfaceScala: String
+  ): JPath = {
+    val tempInterface = tempDir.resolve("Interface.scala")
+    val sigsJar = tempDir.resolve("sigs.jar")
+    Files.writeString(tempInterface, interfaceScala, StandardCharsets.UTF_8)
+    runCompiler(
+      Vector(
+        "scala",
+        "--power",
+        "package",
+        "-S",
+        scalaVersion,
+        "--library",
+        "-f",
+        "-o",
+        sigsJar.toString,
+        "-color:never",
+        "-language:experimental.safe",
+        tempInterface.toString
+      ),
+      "Interface.scala safe-mode compilation"
+    )
+    sigsJar
+  }
+
+  private def validateInterfaceCompiles(interfaceScala: String): Unit =
+    val tempDir = Files.createTempDirectory("capybara-staged-skill-validation-")
+    try
+      compileInterfaceToJar(tempDir, interfaceScala)
+      ()
+    finally deleteRecursively(tempDir)
+
+  private def implementationCompileSource(
+      interfaceScala: String,
+      implementationScala: String
+  ): String = {
+    val interfaceDirectives = fileDirectivePrefix(interfaceScala)
+    val (implementationDirectives, implementationBody) =
+      implementationScala.linesIterator.toVector.span(line =>
+        line.startsWith("//> using ") || line.trim.isEmpty
+      )
+    val mergedDirectives =
+      (interfaceDirectives ++ implementationDirectives).filterNot(line =>
+        line.startsWith("//> using file ") || line.startsWith("//> using files ")
+      )
+    (mergedDirectives ++ implementationBody).mkString(java.lang.System.lineSeparator())
+  }
+
+  private def validateImplementationCompiles(
+      interfaceScala: String,
+      implementationScala: String
+  ): Unit =
+    val tempDir = Files.createTempDirectory("capybara-staged-skill-validation-")
+    try
+      val sigsJar = compileInterfaceToJar(tempDir, interfaceScala)
+      val tempImplementation = tempDir.resolve("Implementation.scala")
+      val implJar = tempDir.resolve("impl.jar")
+      Files.writeString(
+        tempImplementation,
+        implementationCompileSource(interfaceScala, implementationScala),
+        StandardCharsets.UTF_8
+      )
+      runCompiler(
+        Vector(
+          "scala",
+          "--power",
+          "package",
+          "-S",
+          scalaVersion,
+          "--library",
+          "-f",
+          "-o",
+          implJar.toString,
+          "--extra-jar",
+          sigsJar.toString,
+          "-color:never",
+          "-language:experimental.captureChecking,experimental.separationChecking",
+          tempImplementation.toString
+        ),
+        "Implementation.scala compilation"
+      )
+    finally deleteRecursively(tempDir)
 
   private def checkedUniverse(universe: String): String = {
     val trimmed = universe.trim
@@ -265,6 +397,15 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
 
   private def skillFile(skillName: String, relativeFile: String): JPath =
     checkedRelative(s"$skillName/$relativeFile")
+
+  private def readRequiredSkillFile(skillName: String, relativeFile: String): String = {
+    val file = skillFile(skillName, relativeFile)
+    if !Files.exists(file, LinkOption.NOFOLLOW_LINKS) then
+      throw IllegalArgumentException(
+        s"`$relativeFile` must be written before this file can be validated"
+      )
+    Files.readString(checked(file), StandardCharsets.UTF_8)
+  }
 
   private def checklistFor(skillName: String): stagedskills.SkillChecklist = {
     val written =
@@ -359,6 +500,7 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
   update def writeInterface(name: String, interfaceScala: String): stagedskills.SkillChecklist = {
     val skillName = checkedSkillName(name)
     val content = checkedInterface(interfaceScala)
+    validateInterfaceCompiles(content)
     reserveFileWrite(s"$skillName/scripts/Interface.scala")
     writeFile(skillFile(skillName, "scripts/Interface.scala"), content)
     checklistFor(skillName)
@@ -370,6 +512,8 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
   ): stagedskills.SkillChecklist = {
     val skillName = checkedSkillName(name)
     val content = checkedImplementation(implementationScala)
+    val interfaceScala = readRequiredSkillFile(skillName, "scripts/Interface.scala")
+    validateImplementationCompiles(interfaceScala, content)
     reserveFileWrite(s"$skillName/scripts/Implementation.scala")
     writeFile(skillFile(skillName, "scripts/Implementation.scala"), content)
     checklistFor(skillName)
