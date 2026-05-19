@@ -1,5 +1,6 @@
 val Manifest = (
   universe = "staged-skill-authoring",
-  api = "val stagedSkills: stagedskills.StagedSkillWorkspace = ...",
-  predef = "val stagedSkills: stagedskills.StagedSkillWorkspace = stagedskills.internal.impl.current()\n"
+  api =
+    "/* THIS IS PRE-IMPORTED, DO NOT REPEAT */ val stagedSkills: stagedskills.StagedSkillWorkspaceAccess = ...",
+  predef = "val stagedSkills: stagedskills.StagedSkillWorkspaceAccess = stagedskills.internal.impl"
 )

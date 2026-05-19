@@ -3,6 +3,7 @@ package stagedskills.internal
 
 import scala.language.experimental.{captureChecking, separationChecking}
 import caps.assumeSafe
+import caps.any
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path as JPath}
 import java.nio.file.StandardOpenOption
@@ -29,15 +30,17 @@ private object CurrentSession {
 }
 
 private final class LocalStagedSkillWorkspace(rootPath: JPath)
-    extends stagedskills.StagedSkillWorkspace {
+    extends stagedskills.StagedSkillWorkspace
+    with caps.Mutable {
   private val cwdPath = JPath.of(".").toAbsolutePath.normalize()
-  private val requiredFiles =
+  private val requiredFiles: Vector[String] =
     Vector(
       "SKILL.md",
       "scripts/Interface.scala",
       "scripts/Implementation.scala",
       "scripts/Manifest.scala"
     )
+  private var fileWrittenInCall: Option[String] = None
 
   class Path private[LocalStagedSkillWorkspace] (
       private[LocalStagedSkillWorkspace] val inner: JPath
@@ -95,12 +98,13 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
   private def checkedSkillName(name: String): String = {
     val raw = JPath.of(name)
     if (
-      name.trim.isEmpty ||
-      raw.isAbsolute ||
-      raw.getNameCount != 1 ||
-      name == "." ||
-      name == ".."
-    ) then
+        name.trim.isEmpty ||
+        raw.isAbsolute ||
+        raw.getNameCount != 1 ||
+        name == "." ||
+        name == ".."
+      )
+    then
       throw IllegalArgumentException(
         "skill name must be one non-empty directory name inside the staged workspace"
       )
@@ -124,10 +128,36 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
       .takeWhile(line => line.startsWith("//> using ") || line.trim.isEmpty)
       .toVector
 
+  private def packageName(content: String): Option[String] =
+    content.linesIterator.collectFirst {
+      case line if line.trim.startsWith("package ") =>
+        line.trim.stripPrefix("package ").trim
+    }
+
   private def checkedInterface(interfaceScala: String): String = {
     if directivePrefix(interfaceScala).isEmpty then
       throw IllegalArgumentException(
         "Interface.scala must begin with Scala CLI using directives"
+      )
+    if packageName(interfaceScala).isEmpty then
+      throw IllegalArgumentException("Interface.scala must declare a package")
+    val disallowedFragments =
+      Vector(
+        "java.nio.file" -> "Interface.scala must not expose Java NIO filesystem types",
+        "java.io.File" -> "Interface.scala must not expose java.io.File",
+        "os.Path" -> "Interface.scala must not expose os.Path",
+        "scala.sys.process" -> "Interface.scala must not expose shell/process APIs",
+        "sys.process" -> "Interface.scala must not expose shell/process APIs"
+      )
+    disallowedFragments
+      .collectFirst {
+        case (fragment, message) if interfaceScala.contains(fragment) => message
+      }
+      .foreach(message => throw IllegalArgumentException(message))
+    val manifestHelperPattern = raw"(?m)^\s*(val|def)\s+(api|predef|Manifest)\b".r
+    if manifestHelperPattern.findFirstIn(interfaceScala).isDefined then
+      throw IllegalArgumentException(
+        "Interface.scala must not define manifest api, predef, or Manifest helpers"
       )
     interfaceScala
   }
@@ -139,16 +169,26 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
       throw IllegalArgumentException(
         "Implementation.scala must include `//> using file Interface.scala` before its package declaration"
       )
-    val implValuePattern = raw"(?m)^\s*@assumeSafe\s*\n\s*val\s+impl\s*:\s*[^=]+=".r
+    val pkg = packageName(implementationScala).getOrElse {
+      throw IllegalArgumentException("Implementation.scala must declare an internal package")
+    }
+    if !pkg.endsWith(".internal") then
+      throw IllegalArgumentException("Implementation.scala package must end with `.internal`")
+    if !implementationScala.linesIterator.exists(_.trim == "import caps.assumeSafe") then
+      throw IllegalArgumentException("Implementation.scala must import `caps.assumeSafe`")
+    val implValuePattern = raw"(?m)^\s*@assumeSafe\s*(?:\n\s*)?val\s+impl\s*:\s*[^=]+=".r
     if implValuePattern.findAllMatchIn(implementationScala).size != 1 then
       throw IllegalArgumentException(
-        "Implementation.scala must expose exactly one public `@assumeSafe val impl: ExplicitApiInterface = ...`"
+        "Implementation.scala must expose exactly one public top-level member `@assumeSafe val impl: ExplicitApiInterface = ...`, where `@assumeSafe` was previously imported via `import caps.assumeSafe`, and `ExplicitApiInterface` is the public facing API of `Interface.scala`."
       )
     val publicImplDefPattern = raw"(?m)^\s*def\s+impl\b".r
     if publicImplDefPattern.findFirstIn(implementationScala).isDefined then
       throw IllegalArgumentException(
         "Implementation.scala must expose `impl` as a typed value, not a method"
       )
+    val publicImplObjectPattern = raw"(?m)^\s*object\s+impl\b".r
+    if publicImplObjectPattern.findFirstIn(implementationScala).isDefined then
+      throw IllegalArgumentException("Implementation.scala must not expose `object impl`")
     implementationScala
   }
 
@@ -164,31 +204,64 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
   private def checkedApi(api: String): String =
     if api.exists(ch => ch == '\n' || ch == '\r') then
       throw IllegalArgumentException("manifest api must be a single-line calling convention")
-    else if api.trim.isEmpty then
-      throw IllegalArgumentException("manifest api must not be empty")
+    else if api.trim.isEmpty then throw IllegalArgumentException("manifest api must not be empty")
     else api
+
+  private def checkedBindingName(bindingName: String): String = {
+    val trimmed = bindingName.trim
+    if !trimmed.matches("[a-z][A-Za-z0-9_]*") then
+      throw IllegalArgumentException(
+        "manifest binding name must be a lower-camel-case Scala identifier"
+      )
+    trimmed
+  }
+
+  private def checkedFqn(label: String, fqn: String): String = {
+    val trimmed = fqn.trim
+    if !trimmed.matches("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+") then
+      throw IllegalArgumentException(s"$label must be a fully-qualified Scala name")
+    trimmed
+  }
+
+  private def checkedImplementationPackage(implementationPackage: String): String = {
+    val pkg = checkedFqn("implementation package", implementationPackage)
+    if !pkg.endsWith(".internal") then
+      throw IllegalArgumentException("implementation package must end with `.internal`")
+    pkg
+  }
 
   private def scalaStringLiteral(value: String): String = {
     val body =
       value.flatMap {
-        case '\\' => "\\\\"
-        case '"'  => "\\\""
-        case '\n' => "\\n"
-        case '\r' => "\\r"
-        case '\t' => "\\t"
+        case '\\'                                           => "\\\\"
+        case '"'                                            => "\\\""
+        case '\n'                                           => "\\n"
+        case '\r'                                           => "\\r"
+        case '\t'                                           => "\\t"
         case char if java.lang.Character.isISOControl(char) => f"\\u${char.toInt}%04x"
         case char                                           => char.toString
       }
     "\"" + body + "\""
   }
 
-  private def renderManifest(universe: String, api: String, predef: String): String =
+  private def renderManifest(
+      universe: String,
+      bindingName: String,
+      interfaceFqn: String,
+      implementationPackage: String
+  ): String = {
+    val checkedBinding = checkedBindingName(bindingName)
+    val checkedInterface = checkedFqn("interface FQN", interfaceFqn)
+    val checkedImplPackage = checkedImplementationPackage(implementationPackage)
+    val api = s"val $checkedBinding: $checkedInterface = ..."
+    val predef = s"val $checkedBinding: $checkedInterface = $checkedImplPackage.impl"
     s"""val Manifest = (
        |  universe = ${scalaStringLiteral(checkedUniverse(universe))},
        |  api = ${scalaStringLiteral(checkedApi(api))},
        |  predef = ${scalaStringLiteral(predef)}
        |)
        |""".stripMargin
+  }
 
   private def skillFile(skillName: String, relativeFile: String): JPath =
     checkedRelative(s"$skillName/$relativeFile")
@@ -208,6 +281,15 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
 
   private def wrap(path: JPath): Path = Path(checked(path))
 
+  private update def reserveFileWrite(relativeFile: String): Unit =
+    fileWrittenInCall match
+      case Some(previous) =>
+        throw IllegalStateException(
+          s"only one staged skill file may be written per run_scala_code call; `$previous` was already written. Read the returned checklist, then make another call before writing `$relativeFile`."
+        )
+      case None =>
+        fileWrittenInCall = Some(relativeFile)
+
   private def ensureWritableFile(path: JPath): Unit = {
     val parent = Option(path.getParent).getOrElse(rootPath)
     Files.createDirectories(checked(parent))
@@ -215,6 +297,20 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
       throw IllegalArgumentException(
         s"cannot write file over directory: ${rootPath.relativize(path)}"
       )
+  }
+
+  private def writeFile(path: JPath, content: String): Path = {
+    val target = checked(path)
+    ensureWritableFile(target)
+    Files.writeString(
+      target,
+      content,
+      StandardCharsets.UTF_8,
+      StandardOpenOption.CREATE,
+      StandardOpenOption.TRUNCATE_EXISTING,
+      StandardOpenOption.WRITE
+    )
+    wrap(target)
   }
 
   def root(): Path = wrap(rootPath)
@@ -235,18 +331,10 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
 
   def read(path: Path): String = Files.readString(checked(path.inner), StandardCharsets.UTF_8)
 
-  def write(path: Path, content: String): Path = {
+  update def write(path: Path, content: String): Path = {
     val target = checked(path.inner)
-    ensureWritableFile(target)
-    Files.writeString(
-      target,
-      content,
-      StandardCharsets.UTF_8,
-      StandardOpenOption.CREATE,
-      StandardOpenOption.TRUNCATE_EXISTING,
-      StandardOpenOption.WRITE
-    )
-    wrap(target)
+    reserveFileWrite(displayPath(target))
+    writeFile(target, content)
   }
 
   def makeDirectories(path: Path): Path = {
@@ -260,50 +348,53 @@ private final class LocalStagedSkillWorkspace(rootPath: JPath)
   def checklist(name: String): stagedskills.SkillChecklist =
     checklistFor(checkedSkillName(name))
 
-  def writeSkillMarkdown(name: String, skillMd: String): stagedskills.SkillChecklist = {
+  update def writeSkillMarkdown(name: String, skillMd: String): stagedskills.SkillChecklist = {
     val skillName = checkedSkillName(name)
-    write(wrap(skillFile(skillName, "SKILL.md")), checkedSkillMarkdown(skillMd))
+    val content = checkedSkillMarkdown(skillMd)
+    reserveFileWrite(s"$skillName/SKILL.md")
+    writeFile(skillFile(skillName, "SKILL.md"), content)
     checklistFor(skillName)
   }
 
-  def writeInterface(name: String, interfaceScala: String): stagedskills.SkillChecklist = {
+  update def writeInterface(name: String, interfaceScala: String): stagedskills.SkillChecklist = {
     val skillName = checkedSkillName(name)
-    write(
-      wrap(skillFile(skillName, "scripts/Interface.scala")),
-      checkedInterface(interfaceScala)
-    )
+    val content = checkedInterface(interfaceScala)
+    reserveFileWrite(s"$skillName/scripts/Interface.scala")
+    writeFile(skillFile(skillName, "scripts/Interface.scala"), content)
     checklistFor(skillName)
   }
 
-  def writeImplementation(
+  update def writeImplementation(
       name: String,
       implementationScala: String
   ): stagedskills.SkillChecklist = {
     val skillName = checkedSkillName(name)
-    write(
-      wrap(skillFile(skillName, "scripts/Implementation.scala")),
-      checkedImplementation(implementationScala)
-    )
+    val content = checkedImplementation(implementationScala)
+    reserveFileWrite(s"$skillName/scripts/Implementation.scala")
+    writeFile(skillFile(skillName, "scripts/Implementation.scala"), content)
     checklistFor(skillName)
   }
 
-  def writeManifest(
+  update def writeManifest(
       name: String,
       universe: String,
-      api: String,
-      predef: String
+      bindingName: String,
+      interfaceFqn: String,
+      implementationPackage: String
   ): stagedskills.SkillChecklist = {
     val skillName = checkedSkillName(name)
     val manifestPath = skillFile(skillName, "scripts/Manifest.scala")
-    write(wrap(manifestPath), renderManifest(universe, api, predef))
+    val content = renderManifest(universe, bindingName, interfaceFqn, implementationPackage)
+    reserveFileWrite(s"$skillName/scripts/Manifest.scala")
+    writeFile(manifestPath, content)
     checklistFor(skillName)
   }
 }
 
-private object Provider extends stagedskills.StagedSkillWorkspaceProvider {
-  def current(): stagedskills.StagedSkillWorkspace =
-    LocalStagedSkillWorkspace(CurrentSession.rootPath())
+private object StagedSkillWorkspaceAccessImpl extends stagedskills.StagedSkillWorkspaceAccess {
+  def run[T](f: stagedskills.StagedSkillWorkspace^ => T): T =
+    f(LocalStagedSkillWorkspace(CurrentSession.rootPath()))
 }
 
 @assumeSafe
-val impl: stagedskills.StagedSkillWorkspaceProvider = Provider
+val impl: stagedskills.StagedSkillWorkspaceAccess = StagedSkillWorkspaceAccessImpl

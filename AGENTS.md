@@ -1,8 +1,6 @@
 ## Scala Compilation
 
-**ONLY use MCP to compile**, do not use sbt directly for basic compilation tasks and running tests.
-
-To Investigate signatures of library dependencies, use the Cellar CLI - see below.
+use `./mill compile`
 
 ## Cellar
 

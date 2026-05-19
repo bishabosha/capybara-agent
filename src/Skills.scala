@@ -99,10 +99,11 @@ object Skills {
         if skill.requiresRuntimeClasspath then
           s"""#### ${skill.universe}
           |${skill.description}
+          |API type reference only. This is not setup code or an import list; do not import these packages, construct these types, or write setup code from this reference:
           |```scala
           |${skill.interface}
           |```
-          |before your code is executed, the following preamble is inserted beforehand (DO NOT REPEAT THIS IN YOUR CODE):
+          |Calling convention from the skill manifest. These bindings are already in scope in `scala_code`; use them directly and do not repeat, import, wrap, or reconstruct them:
           |```scala
           |${skill.api}
           |```

@@ -103,6 +103,7 @@ object ScalaAgent {
         |The staged skill must follow the same structure as repository skills: `SKILL.md`, `scripts/Interface.scala`, `scripts/Implementation.scala`, and `scripts/Manifest.scala`.
         |The staged workspace for this session is `${session.stagedSkillWorkspace}`.
         |Do not construct Java NIO paths or pass a root path for staged skill authoring; use the provided `stagedSkills` handle and relative paths only.
+        |When using `staged-skill-authoring`, write at most one file per `run_scala_code` call and at most one staged-skill-authoring tool call per assistant response. Make the write call the final expression, then read the returned checklist before deciding the next file to write.
         |Only use the staged-skill workspace for proposing a new capability; after staging, explain what was created and how it would enable the requested workflow.
         |
         |### Available Universes:
@@ -112,6 +113,8 @@ object ScalaAgent {
         |Choose `basic` for calculations, string/list/map transformations, JSON-like data shaping with standard collections, date/time arithmetic, sorting, filtering, and similar local reasoning.
         |Use a skill-specific universe only when the task needs the API described for that universe.
         |Do not choose a skill-specific universe just because the user mentions a path, filename, URL, or command as plain text; choose it only when you must interact with that external resource.
+        |For skill-specific universes, trust the manifest API calling convention: use the values it says are already in scope, and do not write imports, package setup, providers, roots, or replacement bindings for them.
+        |If the manifest says `val stagedSkills: stagedskills.StagedSkillWorkspace = ...`, use `stagedSkills` directly; do not import `stagedskills.*`, call a provider, or discover/rebuild its root.
         |Each universe expects its own calling convention.
         |
         |${renderSkills(availableSkills)}
@@ -205,6 +208,8 @@ object ScalaAgent {
         new java.util.concurrent.atomic.AtomicBoolean(false)
       private var seenAny =
         new java.util.concurrent.atomic.AtomicBoolean(false)
+      private val stagedSkillAuthoringToolSeen =
+        new java.util.concurrent.atomic.AtomicBoolean(false)
 
       private def estimatedTokens(chars: Long): Long =
         if chars == 0 then 0L else math.max(1L, (chars + 3L) / 4L)
@@ -275,32 +280,43 @@ object ScalaAgent {
                 outstandingToolPromises.decrementAndGet()
                 updateStatus("tool promise completed", force = true)
               }
+              val isStagedSkillAuthoring =
+                scalaCode.arguments.universe == "staged-skill-authoring"
               val result =
-                availableSkills.find(_.universe == scalaCode.arguments.universe) match
-                  case Some(skill) =>
-                    val predefSystemProperties =
-                      if skill.universe == "staged-skill-authoring" then
-                        Map(
-                          ReplExec.StagedSkillSessionIdProperty ->
-                            session.stagedSkillSessionId
-                        )
-                      else Map.empty
-                    ReplExec
-                      .runCodeHarness(
-                        builtinSkill,
-                        skill,
-                        scalaCode.arguments.scala_code,
-                        callId,
-                        log,
-                        cancellationToken,
-                        predefSystemProperties
-                      )
-                  case None =>
-                    Future.successful(
-                      ScalaToolResult.Failure(
-                        s"Universe not found: ${scalaCode.arguments.universe}"
-                      )
+                if isStagedSkillAuthoring &&
+                  !stagedSkillAuthoringToolSeen.compareAndSet(false, true)
+                then
+                  Future.successful(
+                    ScalaToolResult.Failure(
+                      "Only one staged-skill-authoring tool call is allowed per assistant response. Read the checklist from the previous call before writing another file."
                     )
+                  )
+                else
+                  availableSkills.find(_.universe == scalaCode.arguments.universe) match
+                    case Some(skill) =>
+                      val predefSystemProperties =
+                        if skill.universe == "staged-skill-authoring" then
+                          Map(
+                            ReplExec.StagedSkillSessionIdProperty ->
+                              session.stagedSkillSessionId
+                          )
+                        else Map.empty
+                      ReplExec
+                        .runCodeHarness(
+                          builtinSkill,
+                          skill,
+                          scalaCode.arguments.scala_code,
+                          callId,
+                          log,
+                          cancellationToken,
+                          predefSystemProperties
+                        )
+                    case None =>
+                      Future.successful(
+                        ScalaToolResult.Failure(
+                          s"Universe not found: ${scalaCode.arguments.universe}"
+                        )
+                      )
               promise.tryCompleteWith(result)
               log.print(
                 s"${Console.YELLOW}${scalaCode.name}[${scalaCode.arguments.universe}]:${Console.RESET}\n"
