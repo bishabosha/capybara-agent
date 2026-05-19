@@ -18,10 +18,12 @@ def main(query: Option[String]) =
   query match
     case Some(q) =>
       given Logger = Logger.ConsoleLogger
+      val agentSession = ScalaAgent.AgentSession.create()
       awaitAll(
         runSession(
           q,
           Vector.empty,
+          agentSession,
           usageTracker,
           contextWindow,
           keepAlive,
@@ -31,6 +33,7 @@ def main(query: Option[String]) =
           .map(printErrorIfNeeded)
       )
     case None =>
+      val agentSession = ScalaAgent.AgentSession.create()
       val chatHistory =
         AtomicReference[Vector[OllamaClient.ChatMessage]](Vector.empty)
       val activeRun = AtomicLong(0)
@@ -52,7 +55,7 @@ def main(query: Option[String]) =
           case "/usage" =>
             logger.print(usageTracker.render)
           case "/sys-prompt" =>
-            logger.print(s"${ScalaAgent.SystemPrompt}\n")
+            logger.print(s"${ScalaAgent.systemPrompt(agentSession)}\n")
           case "/think" =>
             logger.print(s"thinking mode: ${thinkingMode.get().displayName}\n")
           case command if command.startsWith("/think ") =>
@@ -78,7 +81,16 @@ def main(query: Option[String]) =
             val think = ThinkingInference.shouldThink(query, mode)
             printThinking(mode, think)(using logger)
 
-            runSession(query, startingHistory, usageTracker, contextWindow, keepAlive, mode, token)
+            runSession(
+              query,
+              startingHistory,
+              agentSession,
+              usageTracker,
+              contextWindow,
+              keepAlive,
+              mode,
+              token
+            )
               .foreach { result =>
                 val isCurrent = activeRun.get() == runId && !token.isCancelled
                 if isCurrent then
@@ -99,6 +111,7 @@ def main(query: Option[String]) =
 def runSession(
     query: String,
     history: Vector[OllamaClient.ChatMessage],
+    agentSession: ScalaAgent.AgentSession,
     usageTracker: UsageTracker,
     contextWindow: Int,
     keepAlive: String,
@@ -110,6 +123,7 @@ def runSession(
   val think = ThinkingInference.shouldThink(query, thinkingMode)
   continueSession(
     history :+ OllamaClient.ChatMessage.user(query),
+    agentSession,
     0,
     usageTracker,
     contextWindow,
@@ -120,6 +134,7 @@ def runSession(
 
 private def continueSession(
     history: Vector[OllamaClient.ChatMessage],
+    agentSession: ScalaAgent.AgentSession,
     requestCount: Int,
     usageTracker: UsageTracker,
     contextWindow: Int,
@@ -132,7 +147,15 @@ private def continueSession(
     Future.successful(Result.Err(s"agent loop exceeded $MaxAgentRequests model requests"))
   else
     ScalaAgent
-      .singleRequest(history, summon[Logger], contextWindow, keepAlive, think, cancellationToken)
+      .singleRequest(
+        history,
+        agentSession,
+        summon[Logger],
+        contextWindow,
+        keepAlive,
+        think,
+        cancellationToken
+      )
       .flatMap {
         case Result.Ok(response) =>
           usageTracker.record(response.usage)
@@ -140,6 +163,7 @@ private def continueSession(
           if ScalaAgent.hasToolCalls(response.chunks) then
             continueSession(
               updatedHistory,
+              agentSession,
               requestCount + 1,
               usageTracker,
               contextWindow,

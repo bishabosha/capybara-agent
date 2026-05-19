@@ -22,12 +22,14 @@ object ScalaAgent {
 
   type ScalaToolCall = (universe: String, scala_code: String)
   type ScalaResolvedChunk = ResolvedChunk[ScalaToolCall, ScalaToolResult]
+  final case class AgentSession(stagedSkillWorkspace: String)
   final case class AgentResponse(chunks: Seq[ScalaResolvedChunk], usage: OllamaClient.Usage)
   private type RawScalaChunk = (Int, Chunk[ScalaToolCall])
   private final case class RawAgentResponse(chunks: Seq[RawScalaChunk], usage: OllamaClient.Usage)
 
   private val skillsDir = pwd / "skills"
   private val builtinSkillsDir = pwd / "builtin-skills"
+  private val stagedSkillRootPlaceholder = "__CAPYBARA_STAGED_SKILL_ROOT__"
   val Model = "qwen3.6:35b-a3b-coding-nvfp4"
   val DefaultContextWindow = 32768
   val DefaultKeepAlive = "30m"
@@ -48,16 +50,53 @@ object ScalaAgent {
       .filter(_.nonEmpty)
       .getOrElse(DefaultKeepAlive)
 
+  object AgentSession {
+    def create(): AgentSession = {
+      val uuid = java.util.UUID.randomUUID().toString
+      AgentSession(s".agent-runtime/staged-skills/$uuid")
+    }
+  }
+
   def renderSkills(skills: Seq[Skill]): String = {
     Skills.renderPrompt("\n\n", skills)
   }
-  val skills =
+  private val skills =
     try Skills.loadAll(skillsDir)
     catch { case _: IllegalArgumentException => Nil }
-  val availableSkills = Skills.Basic +: skills
-  val builtinSkill =
-    Skills.loadAll(builtinSkillsDir).filter(_.universe == "capybara-builtins").head
-  val SystemPrompt = {
+  private val builtinSkills = Skills.loadAll(builtinSkillsDir)
+  private val builtinSkill =
+    builtinSkills.filter(_.universe == "capybara-builtins").head
+  private val stagedSkillAuthoringTemplate =
+    builtinSkills.find(_.universe == "staged-skill-authoring")
+
+  private def scalaStringLiteral(value: String): String = {
+    val body =
+      value.flatMap {
+        case '\\' => "\\\\"
+        case '"'  => "\\\""
+        case '\n' => "\\n"
+        case '\r' => "\\r"
+        case '\t' => "\\t"
+        case char if java.lang.Character.isISOControl(char) => f"\\u${char.toInt}%04x"
+        case char                   => char.toString
+      }
+    "\"" + body + "\""
+  }
+
+  private def stagedSkillAuthoringSkill(session: AgentSession): Option[Skill] =
+    stagedSkillAuthoringTemplate.map { template =>
+      template.copy(
+        code = template.code.replace(
+          stagedSkillRootPlaceholder,
+          scalaStringLiteral(session.stagedSkillWorkspace)
+        )
+      )
+    }
+
+  private def availableSkills(session: AgentSession): Seq[Skill] =
+    Skills.Basic +: (skills ++ stagedSkillAuthoringSkill(session).toSeq)
+
+  def systemPrompt(session: AgentSession): String = {
     s"""|## TOOL CALLING:
         |You only have access to the `run_scala_code` tool.
         |All actions requested by the user are executed using this tool.
@@ -81,6 +120,15 @@ object ScalaAgent {
         |If an ambiguity materially changes the answer, resource usage, or observable behavior, stop and ask one concise clarification question instead of continuing to reason internally.
         |After a successful tool result, answer with the result and only the minimal explanation needed.
         |
+        |### When No Available Universe Can Do The Task:
+        |
+        |If the user's requested workflow cannot be accomplished with the currently available universes, do not pretend it can.
+        |Use the `staged-skill-authoring` universe to stage a proposed skill that would add the missing capability.
+        |The staged skill must follow the same structure as repository skills: `SKILL.md`, `scripts/Interface.scala`, `scripts/Implementation.scala`, and `scripts/Manifest.scala`.
+        |The staged workspace for this session is `${session.stagedSkillWorkspace}`.
+        |Do not construct Java NIO paths or pass a root path for staged skill authoring; use the provided `stagedSkills` handle and relative paths only.
+        |Only use the staged-skill workspace for proposing a new capability; after staging, explain what was created and how it would enable the requested workflow.
+        |
         |### Available Universes:
         |
         |The `universe` argument selects the execution context for the code.
@@ -90,12 +138,13 @@ object ScalaAgent {
         |Do not choose a skill-specific universe just because the user mentions a path, filename, URL, or command as plain text; choose it only when you must interact with that external resource.
         |Each universe expects its own calling convention.
         |
-        |${renderSkills(availableSkills)}
+        |${renderSkills(availableSkills(session))}
         |""".stripMargin
   }
 
   def singleRequest(
       query: String,
+      session: AgentSession,
       log: Logger,
       contextWindow: Int,
       keepAlive: String,
@@ -106,6 +155,7 @@ object ScalaAgent {
   ): Future[Result[AgentResponse, String]] =
     singleRequest(
       Vector(OllamaClient.ChatMessage.user(query)),
+      session,
       log,
       contextWindow,
       keepAlive,
@@ -115,6 +165,7 @@ object ScalaAgent {
 
   def singleRequest(
       history: Seq[OllamaClient.ChatMessage],
+      session: AgentSession,
       log: Logger,
       contextWindow: Int,
       keepAlive: String,
@@ -138,7 +189,7 @@ object ScalaAgent {
     )
     val request = OllamaClient.request(
       model = Model,
-      messages = OllamaClient.ChatMessage.system(SystemPrompt) +: history,
+      messages = OllamaClient.ChatMessage.system(systemPrompt(session)) +: history,
       tools = tool.tools,
       toolParsers = tool.toolParsers,
       contextWindow = contextWindow,
@@ -249,7 +300,7 @@ object ScalaAgent {
                 updateStatus("tool promise completed", force = true)
               }
               val result =
-                availableSkills.find(_.universe == scalaCode.arguments.universe) match
+                availableSkills(session).find(_.universe == scalaCode.arguments.universe) match
                   case Some(skill) =>
                     ReplExec
                       .runCodeHarness(
