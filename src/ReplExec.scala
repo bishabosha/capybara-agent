@@ -19,6 +19,7 @@ import scala.concurrent.Future
 
 object ReplExec {
   val ScalaVersion = "3.9.0-RC1-bin-20260430-a24622b-NIGHTLY"
+  val StagedSkillSessionIdProperty = "capybara.agent.stagedSkillSessionId"
 
   type ResultBody[+T, +E] = Label[Result.Err[E]] ?=> T
 
@@ -221,6 +222,7 @@ object ReplExec {
         builtins: Skill,
         skill: Skill,
         scalaCode: String,
+        predefSystemProperties: Map[String, String],
         cancellationToken: CancellationToken
     ): Result[String, String] =
       if cancellationToken.isCancelled then Result.Err("cancelled")
@@ -232,7 +234,10 @@ object ReplExec {
           try
             result {
               loadSkill(builtins).check
-              if skill.requiresRuntimeClasspath then loadSkill(skill).check
+              if skill.requiresRuntimeClasspath then
+                withSystemProperties(predefSystemProperties) {
+                  loadSkill(skill).check
+                }
               registerCurrentClassLoader(trackedExecution.execution)
               if cancellationToken.isCancelled then raise("cancelled")
               val _ = step(
@@ -260,6 +265,22 @@ object ReplExec {
         state = initialState
         ReplOutputStream.clearBuffer()
     }
+
+    private def withSystemProperties[T](properties: Map[String, String])(op: => T): T =
+      if properties.isEmpty then op
+      else {
+        val previous =
+          properties.keys.map(key => key -> Option(java.lang.System.getProperty(key))).toMap
+        properties.foreach { case (key, value) =>
+          java.lang.System.setProperty(key, value)
+        }
+        try op
+        finally
+          previous.foreach {
+            case (key, Some(value)) => java.lang.System.setProperty(key, value)
+            case (key, None)        => java.lang.System.clearProperty(key)
+          }
+      }
   }
 
   private object ReplOutputStream extends java.io.OutputStream {
@@ -292,11 +313,18 @@ object ReplExec {
       builtins: Skill,
       skill: Skill,
       scalaCode: String,
-      cancellationToken: CancellationToken = CancellationToken.Never
+      cancellationToken: CancellationToken = CancellationToken.Never,
+      predefSystemProperties: Map[String, String] = Map.empty
   ): Result[String, String] = try {
     ensureCompiled(builtins)
     if skill.requiresRuntimeClasspath then ensureCompiled(skill)
-    globalSession.runExpression(builtins, skill, scalaCode, cancellationToken)
+    globalSession.runExpression(
+      builtins,
+      skill,
+      scalaCode,
+      predefSystemProperties,
+      cancellationToken
+    )
   } finally {
     ReplOutputStream.clearBuffer()
   }
@@ -314,7 +342,8 @@ object ReplExec {
       scalaCode: String,
       callId: Int,
       log: Logger,
-      cancellationToken: CancellationToken = CancellationToken.Never
+      cancellationToken: CancellationToken = CancellationToken.Never,
+      predefSystemProperties: Map[String, String] = Map.empty
   )(using
       ExecutionContext
   ): Future[ScalaToolResult] =
@@ -330,7 +359,14 @@ object ReplExec {
               s"running tool #$callId",
               shouldUpdate = () => !cancellationToken.isCancelled
             )
-          try runCode(builtins, skill, scalaCode, cancellationToken)
+          try
+            runCode(
+              builtins,
+              skill,
+              scalaCode,
+              cancellationToken = cancellationToken,
+              predefSystemProperties = predefSystemProperties
+            )
           finally monitor.close()
       }
     }.transform({ try0 =>

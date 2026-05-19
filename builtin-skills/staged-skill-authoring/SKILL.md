@@ -22,7 +22,7 @@ skill-name/
 
 ### SKILL.md
 
-Use YAML frontmatter with `name` and `description`, then concise instructions.
+Use `stagedSkills.writeSkillMarkdown(...)` to create this file. It must use YAML frontmatter with `name` and `description`, then concise instructions.
 
 ```markdown
 ---
@@ -37,7 +37,7 @@ Brief workflow instructions for the agent.
 
 ### scripts/Interface.scala
 
-The interface file must begin with Scala CLI using directives before the package declaration.
+Use `stagedSkills.writeInterface(...)` to create this file. It must begin with Scala CLI using directives before the package declaration.
 
 ```scala
 //> using options -preview
@@ -52,7 +52,7 @@ Keep this file to safe public signatures. Do not expose constructors, root paths
 
 ### scripts/Implementation.scala
 
-The implementation file must begin with a using directive for the interface file.
+Use `stagedSkills.writeImplementation(...)` to create this file. It must include a using directive for the interface file before the package declaration.
 
 ```scala
 //> using file Interface.scala
@@ -69,11 +69,15 @@ private object PrivateCapability extends packageName.CapabilityName {
 val impl: packageName.CapabilityName = PrivateCapability
 ```
 
+The implementation must expose exactly one public value: `@assumeSafe val impl: packageName.CapabilityName = ...`. The explicit type must be the public API interface from `Interface.scala`; do not leave it inferred, because inference can leak private implementation types into the generated interface. Do not expose `impl` as a `def`, object, class, or untyped value.
+
 Do not repeat `Interface.scala` contents here. Place dependencies and other Scala CLI directives at the top, before the `package` line.
 
 ### scripts/Manifest.scala
 
-The manifest must be exactly a top-level named tuple assigned to `val Manifest`.
+Do not author this file by hand. Use `stagedSkills.writeManifest(...)`; the staged workspace implementation renders the file.
+
+The rendered manifest will be exactly a top-level named tuple assigned to `val Manifest`.
 
 ```scala
 val Manifest = (
@@ -89,10 +93,19 @@ The required named tuple fields are:
 - `api`: concise instructions shown to the agent, including the preloaded binding shape.
 - `predef`: Scala setup code executed before agent code; usually binds the public value to `*.internal.impl`.
 
+The `api` field must be a single-line calling convention, for example `val capability: packageName.CapabilityName = ...`.
+
 The manifest must not define a case class, object, method, JSON value, or YAML value. It must be parseable as Scala object notation by the runtime loader.
 
 ## Staging Rules
 
-Use `stagedSkills.writeSkill(...)` for normal creation. Use `write`, `read`, `list`, `makeDirectories`, and `exists` only to inspect or adjust files inside the staged workspace.
+Use the file-specific methods for normal creation:
+
+- `writeSkillMarkdown(name, skillMd)`
+- `writeInterface(name, interfaceScala)`
+- `writeImplementation(name, implementationScala)`
+- `writeManifest(name, universe, api, predef)`
+
+Each file-specific write returns a checklist with `written`, `remaining`, and `complete` fields. Use `stagedSkills.checklist(name)` to inspect progress without writing. Use `write`, `read`, `list`, `makeDirectories`, and `exists` only to inspect or adjust files inside the staged workspace.
 
 All paths are relative to the staged workspace. Absolute paths, `..` parent segments, and symbolic links are rejected. The workspace directory is created lazily only by mutating operations.

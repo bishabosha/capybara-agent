@@ -22,14 +22,15 @@ object ScalaAgent {
 
   type ScalaToolCall = (universe: String, scala_code: String)
   type ScalaResolvedChunk = ResolvedChunk[ScalaToolCall, ScalaToolResult]
-  final case class AgentSession(stagedSkillWorkspace: String)
+  final case class AgentSession(stagedSkillSessionId: String) {
+    def stagedSkillWorkspace: String = s".agent-runtime/staged-skills/$stagedSkillSessionId"
+  }
   final case class AgentResponse(chunks: Seq[ScalaResolvedChunk], usage: OllamaClient.Usage)
   private type RawScalaChunk = (Int, Chunk[ScalaToolCall])
   private final case class RawAgentResponse(chunks: Seq[RawScalaChunk], usage: OllamaClient.Usage)
 
   private val skillsDir = pwd / "skills"
   private val builtinSkillsDir = pwd / "builtin-skills"
-  private val stagedSkillRootPlaceholder = "__CAPYBARA_STAGED_SKILL_ROOT__"
   val Model = "qwen3.6:35b-a3b-coding-nvfp4"
   val DefaultContextWindow = 32768
   val DefaultKeepAlive = "30m"
@@ -53,7 +54,7 @@ object ScalaAgent {
   object AgentSession {
     def create(): AgentSession = {
       val uuid = java.util.UUID.randomUUID().toString
-      AgentSession(s".agent-runtime/staged-skills/$uuid")
+      AgentSession(uuid)
     }
   }
 
@@ -66,35 +67,10 @@ object ScalaAgent {
   private val builtinSkills = Skills.loadAll(builtinSkillsDir)
   private val builtinSkill =
     builtinSkills.filter(_.universe == "capybara-builtins").head
-  private val stagedSkillAuthoringTemplate =
+  private val stagedSkillAuthoring =
     builtinSkills.find(_.universe == "staged-skill-authoring")
-
-  private def scalaStringLiteral(value: String): String = {
-    val body =
-      value.flatMap {
-        case '\\' => "\\\\"
-        case '"'  => "\\\""
-        case '\n' => "\\n"
-        case '\r' => "\\r"
-        case '\t' => "\\t"
-        case char if java.lang.Character.isISOControl(char) => f"\\u${char.toInt}%04x"
-        case char                   => char.toString
-      }
-    "\"" + body + "\""
-  }
-
-  private def stagedSkillAuthoringSkill(session: AgentSession): Option[Skill] =
-    stagedSkillAuthoringTemplate.map { template =>
-      template.copy(
-        code = template.code.replace(
-          stagedSkillRootPlaceholder,
-          scalaStringLiteral(session.stagedSkillWorkspace)
-        )
-      )
-    }
-
-  private def availableSkills(session: AgentSession): Seq[Skill] =
-    Skills.Basic +: (skills ++ stagedSkillAuthoringSkill(session).toSeq)
+  private val availableSkills: Seq[Skill] =
+    Skills.Basic +: (skills ++ stagedSkillAuthoring.toSeq)
 
   def systemPrompt(session: AgentSession): String = {
     s"""|## TOOL CALLING:
@@ -138,7 +114,7 @@ object ScalaAgent {
         |Do not choose a skill-specific universe just because the user mentions a path, filename, URL, or command as plain text; choose it only when you must interact with that external resource.
         |Each universe expects its own calling convention.
         |
-        |${renderSkills(availableSkills(session))}
+        |${renderSkills(availableSkills)}
         |""".stripMargin
   }
 
@@ -300,8 +276,15 @@ object ScalaAgent {
                 updateStatus("tool promise completed", force = true)
               }
               val result =
-                availableSkills(session).find(_.universe == scalaCode.arguments.universe) match
+                availableSkills.find(_.universe == scalaCode.arguments.universe) match
                   case Some(skill) =>
+                    val predefSystemProperties =
+                      if skill.universe == "staged-skill-authoring" then
+                        Map(
+                          ReplExec.StagedSkillSessionIdProperty ->
+                            session.stagedSkillSessionId
+                        )
+                      else Map.empty
                     ReplExec
                       .runCodeHarness(
                         builtinSkill,
@@ -309,7 +292,8 @@ object ScalaAgent {
                         scalaCode.arguments.scala_code,
                         callId,
                         log,
-                        cancellationToken
+                        cancellationToken,
+                        predefSystemProperties
                       )
                   case None =>
                     Future.successful(
