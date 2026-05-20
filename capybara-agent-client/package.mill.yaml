@@ -1,0 +1,19 @@
+extends: [ScalaModule, PublishModule]
+scalaVersion: 3.9.0-RC1-bin-20260520-c101b01-NIGHTLY
+repositories: ["https://repo.scala-lang.org/artifactory/maven-nightlies"]
+publishVersion: 0.0.1
+artifactName: capybara-agent-client
+scalacOptions:
+  - -Wunused:imports
+  - -Wnonunit-statement
+  - language:experimental.captureChecking,experimental.separationChecking
+mvnDeps:
+  - ch.epfl.lamp::steps:0.2.1
+  - io.github.bishabosha::scala-object-notation:0.2.2-RC1
+pomSettings:
+  description: client library for the capybara-agent
+  organization: io.github.bishabosha
+  url: https://github.com/bishabosha/capybara-agent
+  licenses: [apache-2]
+  versionControl: https://github.com/bishabosha/capybara-agent
+  developers: [{name: Jamie Thompson, email: jamie.thompson@bath.edu}]

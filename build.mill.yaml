@@ -3,8 +3,10 @@ mill-build:
     - skills/
     - builtin-skills/
     - .metals/
+    - .agent-runtime/
 extends: ScalaModule
-scalaVersion: 3.9.0-RC1-bin-20260430-a24622b-NIGHTLY
+moduleDeps: [build.capybara-agent-client]
+scalaVersion: 3.9.0-RC1-bin-20260520-c101b01-NIGHTLY
 repositories: ["https://repo.scala-lang.org/artifactory/maven-nightlies"]
 scalacOptions:
   - -Wunused:imports
@@ -16,7 +18,7 @@ mvnDeps:
   - com.lihaoyi::upickle-jsonschema:4.4.3
   - org.jline:jline:3.30.0
   - ch.epfl.lamp::steps:0.2.1
-  - org.scala-lang::scala3-repl:3.9.0-RC1-bin-20260430-a24622b-NIGHTLY
+  - org.scala-lang::scala3-repl:3.9.0-RC1-bin-20260520-c101b01-NIGHTLY
   - com.lihaoyi::os-lib:0.11.8
   - io.github.bishabosha::scala-object-notation:0.2.2-RC1
   - org.virtuslab::scala-yaml:0.3.1

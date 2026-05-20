@@ -18,7 +18,7 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 
 object ReplExec {
-  val ScalaVersion = "3.9.0-RC1-bin-20260430-a24622b-NIGHTLY"
+  val ScalaVersion = "3.9.0-RC1-bin-20260520-c101b01-NIGHTLY"
 
   type ResultBody[+T, +E] = Label[Result.Err[E]] ?=> T
 
@@ -54,7 +54,13 @@ object ReplExec {
           sys
             .props("java.class.path")
             .split(java.io.File.pathSeparator)
-            .filter(p => p.contains("/org/scala-lang/scala-library/"))
+            .toArray
+            .filter(p =>
+              p.contains("/org/scala-lang/scala-library/") ||
+                p.contains("/ch/epfl/lamp/steps_3/") ||
+                p.contains("/io/github/bishabosha/scala-object-notation_3/") ||
+                p.contains("/out/capybara-agent-client/compile.dest/classes")
+            )
             .map(path => Paths.get(path).toUri.toURL)
         },
         ClassLoader.getSystemClassLoader.getParent
@@ -66,17 +72,78 @@ object ReplExec {
         settings = Array(
           "-classpath",
           ScalaClassLoader.getURLs.map(_.toURI().getPath()).mkString(":"),
-          "-language:experimental.safe",
+          "-language:experimental.safe,experimental.captureChecking,experimental.separationChecking",
+          // "-Xrepl-interrupt-instrumentation:true",
           "-Xrepl-interrupt-instrumentation:true",
+          // "-Vprint:repl",
           "-color:never"
         ),
         out = ps,
         classLoader = Some(ScalaClassLoader),
         extraPredef = ""
-      ) {
+      ) { thisSession =>
 
     var state = initialState
     private val activeExecution = AtomicReference[ActiveReplExecution | Null](null)
+
+    private def getDefFromLastExecution(
+        ioLocalName: String
+    )(using state: State): AnyRef = {
+      import dotty.tools.repl.Rendering
+      val clsName = s"${Rendering.REPL_WRAPPER_NAME_PREFIX}${state.objectIndex}"
+      val cls = Class.forName(clsName, true, currentReplClassLoader)
+      cls.getDeclaredMethods
+        .find(_.getName == ioLocalName)
+        .map(_.invoke(null))
+        .getOrElse(null)
+    }
+
+    private def extractDelegate(ioProvider: AnyRef): Result[AnyRef, String] = result {
+      val providerClass = ioProvider.getClass
+      try
+        providerClass
+          .getDeclaredMethod("live")
+          .invoke(ioProvider)
+      catch
+        case _: NoSuchMethodException =>
+          raise(
+            s"Expected to find `live` method on IO provider, but it was not found."
+          )
+    }
+
+    private def extractClientIO(builtins: AnyRef): Result[AnyRef, String] = result {
+      val providerClass = builtins.getClass
+      try
+        providerClass
+          .getDeclaredMethod("clientIO")
+          .invoke(builtins)
+      catch
+        case _: NoSuchMethodException =>
+          raise(
+            s"Expected to find `clientIO` method on builtins, but it was not found."
+          )
+    }
+
+    private def getReflectiveIO(delegate: AnyRef): capybara.agent.client.IO =
+      new capybara.agent.client.IO {
+        override def sendMessageRaw(message: String): Unit =
+          delegate.getClass
+            .getMethod("sendMessageRaw", classOf[String])
+            .invoke(delegate, message.asInstanceOf[Object])
+            .asInstanceOf[Unit]
+
+        override def isBuffered: Boolean =
+          delegate.getClass
+            .getMethod("isBuffered")
+            .invoke(delegate)
+            .asInstanceOf[Boolean]
+
+        override def readMessageRaw(): String =
+          delegate.getClass
+            .getMethod("readMessageRaw")
+            .invoke(delegate)
+            .asInstanceOf[String]
+      }
 
     private def currentReplClassLoader(using state: State): ClassLoader =
       rendering.getClass
@@ -228,27 +295,48 @@ object ReplExec {
         stateless {
           val uuid = java.util.UUID.randomUUID().toString.replaceAll("-", "_")
           val methodName = s"agentCode_$uuid"
+          val harnessName = s"harness_$uuid"
+          val ioLocalName = s"io_$uuid"
           val trackedExecution = trackExecution(cancellationToken)
           try
             result {
               loadSkill(builtins).check
+              // val builtinsObj = getDefFromLastExecution("builtins")(using state)
               if skill.requiresRuntimeClasspath then loadSkill(skill).check
               registerCurrentClassLoader(trackedExecution.execution)
               if cancellationToken.isCancelled then raise("cancelled")
-              val _ = step(
-                s"""def $methodName() = {
+              val vid = state.valIndex
+              val dbg = step(
+                s"""val $ioLocalName: capybara.agent.client.ClientProvider^ = capybara.agent.client.ClientProvider()
+                  |def $methodName() = {
                   |${embedString(scalaCode)}
+                  |}
+                  |def $harnessName() = {
+                  |$ioLocalName.client(builtins.evaluateAndPrintFormatted($methodName()))
                   |}
                   |""".stripMargin,
                 s"while compiling agent generated code for universe `${skill.universe}`."
               ).ok
+              // println(s"Compiled method $methodName with valIndex $vid, REPL output:\n$dbg")
               if cancellationToken.isCancelled then raise("cancelled")
-              val output = step(
-                s"""builtins.evaluateAndPrintFormatted($methodName())""",
+              val ioProvider = getDefFromLastExecution(ioLocalName)(using state)
+              val debugFinalOutput = step(
+                s"""$harnessName()""",
                 s"while running agent generated code for universe `${skill.universe}`."
               ).ok
               if cancellationToken.isCancelled then raise("cancelled")
-              output
+              val replIO = getReflectiveIO(extractDelegate(ioProvider).ok)
+              // val replIO = getReflectiveIO(extractDelegate(extractClientIO(builtinsObj).ok).ok)
+              if replIO.isBuffered then replIO.readMessageRaw()
+              else
+                raise(
+                  s"""Expected the IO provider to be buffered, but it was not. This likely means that an exception escaped the harness.
+                    |REPL output:
+                    |```scala
+                    |${embedString(debugFinalOutput)}
+                    |```
+                    |""".stripMargin
+                )
             }
           finally trackedExecution.close()
         }
@@ -424,7 +512,7 @@ object ReplExec {
                 "-f",
                 "-o",
                 sigsJar,
-                "-language:experimental.safe",
+                "-language:experimental.safe,experimental.captureChecking,experimental.separationChecking",
                 tempInterface
               )
             )
@@ -451,6 +539,7 @@ object ReplExec {
                     "-f",
                     "-o",
                     implJar,
+                    "-language:experimental.captureChecking,experimental.separationChecking",
                     "--extra-jar",
                     sigsJar,
                     tempCode

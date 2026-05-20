@@ -4,9 +4,26 @@ import scala.language.experimental.{captureChecking, separationChecking}
 import caps.assumeSafe
 import scala.Conversion.into
 import scala.math.ScalaNumber
+import scala.caps.Mutable
+import capybara.agent.client.Client
+import capybara.agent.client.ClientProvider
 
 @assumeSafe
-object builtins extends system.Builtins { self =>
+object builtins extends system.Builtins {
+  export ShowableHelpers.baseReflectiveShowable
+
+  def evaluateAndPrintFormatted(any: => into[system.Showable])(using io: Client^): Unit =
+    val result = scala.util.Try(any) match
+      case scala.util.Success(value) =>
+        system.ShowableObj(Map(system.Literal("special.success") -> value))
+      case scala.util.Failure(exception) =>
+        system.ShowableObj(
+          Map(system.Literal("special.error") -> ShowableHelpers.baseReflectiveShowable(exception))
+        )
+    io.sendMessageRaw(ShowableHelpers.displayShowable(result, isKey = false))
+}
+
+private[system_impl] object ShowableHelpers {
   private def isLazySequence(any: Any): Boolean =
     any != null && {
       val name = any.getClass.getName
@@ -39,9 +56,23 @@ object builtins extends system.Builtins { self =>
         case tryValue: scala.util.Try[?] =>
           tryValue match
             case scala.util.Success(value) =>
-              baseReflectiveShowable(value)
+              system.ShowableObj(
+                Map(system.Literal("_class") -> system.Literal("scala.util.Success"), system.Literal("value") -> baseReflectiveShowable(value))
+              )
             case scala.util.Failure(exception) =>
-              baseReflectiveShowable(exception)
+              system.ShowableObj(
+                Map(system.Literal("_class") -> system.Literal("scala.util.Failure"), system.Literal("value") -> baseReflectiveShowable(exception))
+              )
+        case eitherValue: scala.util.Either[?, ?] =>
+          eitherValue match
+            case scala.util.Left(value) =>
+              system.ShowableObj(
+                Map(system.Literal("_class") -> system.Literal("scala.Left"), system.Literal("value") -> baseReflectiveShowable(value))
+              )
+            case scala.util.Right(value) =>
+              system.ShowableObj(
+                Map(system.Literal("_class") -> system.Literal("scala.Right"), system.Literal("value") -> baseReflectiveShowable(value))
+              )
         case throwable: java.lang.Throwable =>
           val showableException = system.ShowableObj(
             Map(
@@ -78,7 +109,7 @@ object builtins extends system.Builtins { self =>
           system.Literal(other.toString)
       }
 
-  private def displayShowable(showable: system.Showable, isKey: Boolean): String =
+  def displayShowable(showable: system.Showable, isKey: Boolean): String =
     def asString(str: String): String =
       '"' + str
         .replaceAllLiterally("\"", "\\\"")
@@ -114,15 +145,4 @@ object builtins extends system.Builtins { self =>
             .mkString("[", ", ", "]")
           if isKey then asString(raw) else raw
     }
-
-  def evaluateAndPrintFormatted(any: => into[system.Showable]): Unit =
-    val result = scala.util.Try(any) match
-      case scala.util.Success(value) =>
-        system.ShowableObj(Map(system.Literal("special.success") -> value))
-      case scala.util.Failure(exception) =>
-        system.ShowableObj(
-          Map(system.Literal("special.error") -> baseReflectiveShowable(exception))
-        )
-
-    println(displayShowable(result, isKey = false))
 }
