@@ -216,7 +216,7 @@ object ReplExec {
   def ensureCompiled(skill: Skill): Unit =
     if skill.requiresRuntimeClasspath then
       compileLock.synchronized {
-        compileSkill(skill)
+        val _ = compileSkill(skill)
         ()
       }
 
