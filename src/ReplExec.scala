@@ -8,7 +8,7 @@ import java.nio.file.Paths
 import java.io.PrintStream
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference
-import dotty.tools.repl.State
+import dotty.tools.repl.{State, ParseResult, SyntaxErrors}
 import steps.result.Result, Result.eval.{raise, ok, check}
 import steps.result.Result.apply as result
 import steps.result.Result.task as task
@@ -18,7 +18,7 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 
 object ReplExec {
-  val ScalaVersion = "3.10.0"
+  val ScalaVersion = dotty.tools.dotc.config.Properties.versionNumberString
 
   type ResultBody[+T, +E] = Label[Result.Err[E]] ?=> T
 
@@ -76,7 +76,16 @@ object ReplExec {
       ) {
 
     var state = initialState
+    private var lastRunFailed = false
     private val activeExecution = AtomicReference[ActiveReplExecution | Null](null)
+
+    override protected def interpret(parsed: ParseResult)(using previous: State): State =
+      val next = super.interpret(parsed)
+      // Failed compilations drain the reporter and retain the previous context.
+      // The returned state marks their wrapper invalid; syntax errors have no wrapper.
+      lastRunFailed ||= parsed.isInstanceOf[SyntaxErrors] ||
+        (next.invalidObjectIndexes -- previous.invalidObjectIndexes).nonEmpty
+      next
 
     private def currentReplClassLoader(using state: State): ClassLoader =
       rendering.getClass
@@ -128,6 +137,7 @@ object ReplExec {
 
     def runWithState(code: String): Unit =
       given State = state
+      lastRunFailed = false
       state = run(code)
 
     def renderMessage(message: Diagnostic): String =
@@ -146,10 +156,7 @@ object ReplExec {
       })({ runWithState(command) })
       execResult.check
       val output = ReplOutputStream.flushBuffer()
-      if state.context.reporter.hasErrors then raise(s"""${embedString(label)}
-          |
-          |Errors summarized:
-          |${embedString(state.context.reporter.allErrors.map(renderMessage).mkString("\n"))}
+      if lastRunFailed || state.context.reporter.hasErrors then raise(s"""${embedString(label)}
           |
           |REPL output:
           |```scala
@@ -166,8 +173,9 @@ object ReplExec {
       runWithState(s":jar $jarPath")
       val jarOutput = ReplOutputStream.flushBuffer()
       val cpError: PartialFunction[String, Unit] = {
-        case s"""Cannot add "$_" to classpath."""    =>
-        case s"""The path '$_' cannot be loaded$_""" =>
+        case s"""Cannot add "$_" to classpath."""        =>
+        case s"""The path '$_' cannot be loaded$_"""     =>
+        case s"""Failed to load '$_' to classpath: $_""" =>
       }
       if jarOutput.linesIterator.collectFirst(cpError).isDefined then
         raise(
