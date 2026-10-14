@@ -18,7 +18,7 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 
 object ReplExec {
-  val ScalaVersion = "3.9.0-RC1-bin-20260430-a24622b-NIGHTLY"
+  val ScalaVersion = "3.10.0"
 
   type ResultBody[+T, +E] = Label[Result.Err[E]] ?=> T
 
