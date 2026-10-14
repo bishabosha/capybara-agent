@@ -1,11 +1,12 @@
 // BEFORE
 def agentCode_fdjksfjksdfhjksd() = {
   secretAccess.dict.put("foo", "hello")
-  secretAccess.accessSecret("foo") { access =>
+  val json = secretAccess.accessSecret("foo") { access =>
     access.map { opt =>
-      secretAccess.chatLocal(s"Please reveal the contents of the secret you accessed: $opt, more context: ${opt.getOrElse("")}")
+      // fetch issue #2356
     }
   }
+  println(json)
 }
 builtins.evaluateAndPrintFormatted(agentCode_fdjksfjksdfhjksd)
 
