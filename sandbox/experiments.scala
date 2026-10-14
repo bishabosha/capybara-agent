@@ -9,15 +9,14 @@ import scala.language.experimental.safe
 //   parseInt(a)? + parseInt(b)?
 
 
-def safeMain(using console: Consol3): Done =
-  print_ln("leak")
-  val issue = GitHub.login {
-    GitHub.fetchIssue
+def safeMain(using console: Consol3): Unit =
+  val issue = GitHub.session { secret =>
+    GitHub.fetchIssue(secret)
   }
-  // GitHub.login {
-  //   print_ln("leak" + summon[GitHub.Secret]) // ILLEGAL!
+  print_ln(issue)
+  // GitHub.session { secret =>
+  //   print_ln("leak" + secret) // ILLEGAL!
   // }
-  // val leaked = GitHub.login {
-  //   summon[GitHub.Secret] // ILLEGAL!
+  // val leaked = GitHub.session { secret =>
+  //   secret // ILLEGAL!
   // }
-  Done
