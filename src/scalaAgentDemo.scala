@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 private val MaxAgentRequests = 16
 
-def main(query: Option[String]) =
+def runAgent(query: Option[String]) =
   val contextWindow = ScalaAgent.configuredContextWindow
   val keepAlive = ScalaAgent.configuredKeepAlive
   val usageTracker = UsageTracker(Some(contextWindow))
@@ -94,7 +94,7 @@ def main(query: Option[String]) =
                 else ()
               }
         Terminal.NextState.Continue
-      }
+    }
 
 def runSession(
     query: String,
@@ -173,9 +173,6 @@ private def printThinking(mode: ThinkingInference.ThinkingMode, think: Boolean)(
     if think then s"[thinking enabled, mode=${mode.displayName}]"
     else s"[thinking disabled, mode=${mode.displayName}]"
   summon[Logger].setStatus(Some(s"${Console.CYAN}$status${Console.RESET}"))
-
-@main def run(args: String*): Unit =
-  val _ = mainargs.ParserForMethods(this).runOrExit(args)
 
 private def awaitAll[T](f: Future[T]): T =
   Await.result(f, scala.concurrent.duration.Duration.Inf)
