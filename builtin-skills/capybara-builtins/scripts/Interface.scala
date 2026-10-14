@@ -2,10 +2,7 @@
 package system
 
 import scala.math.ScalaNumber
-import scala.NamedTuple.NamedTuple
 import scala.Conversion.into
-import scala.util.Try
-import scala.annotation.publicInBinary
 
 import scala.language.experimental.captureChecking
 
@@ -22,6 +19,15 @@ trait BuiltinsLowPrio extends caps.Pure {
     def apply(a: A): Showable = baseReflectiveShowable(a)
 }
 trait Builtins extends BuiltinsLowPrio {
-  // TODO: add "deferred" givens to convert named tuple types
-  def evaluateAndPrintFormatted(any: -> into[Showable]): Unit
+
+  trait OutputStreams extends caps.SharedCapability {
+    /** Emit one structured value to stdout. Final expression values are discarded. */
+    def print(value: into[Showable]): Unit
+    /** Emit one structured error. Final expression values are discarded. */
+    def printErr(err: into[system.Showable]): Unit
+  }
+
+  final def puts(value: into[Showable])(using OutputStreams): Unit = summon[OutputStreams].print(value)
+  final def putsErr(err: into[Showable])(using OutputStreams): Unit = summon[OutputStreams].printErr(err)
+
 }

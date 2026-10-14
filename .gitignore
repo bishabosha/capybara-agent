@@ -6,6 +6,8 @@ project/target/
 .cellar/
 out/
 .bsp/
+**/.bsp/
+**/.scala-build/
 out.txt
 **/.agent-runtime/
 .os-lib-watch-sentinel-*
