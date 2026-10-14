@@ -57,6 +57,74 @@ loaded skill. `ReplExec` loads baseline builtins plus any selected skill's JARs
 and predefs, then resets the REPL state after each execution. Tool results return
 to the model as conversation messages; streamed output goes to the logger.
 
+## How skills work
+
+A skill adds a Scala API to a named execution **universe**. At startup,
+`Skills.loadAll` reads skill directories from `skills/`; `ScalaAgent` adds the
+`basic` universe and loads `capybara-builtins` separately from `builtin-skills/`.
+The model sees each available universe's description, interface, and API
+preamble in the system prompt, then selects a universe when calling
+`run_scala_code`.
+
+```mermaid
+flowchart TD
+    subgraph Definition["Skill directory"]
+        Md["SKILL.md<br/>YAML name and description"]
+        Manifest["scripts/Manifest.scala<br/>universe, api, predef"]
+        Interface["scripts/Interface.scala<br/>Public Scala API"]
+        Implementation["scripts/Implementation.scala<br/>Runtime implementation"]
+    end
+    Md --> Load["Skills.loadAll / loadFrom"]
+    Manifest --> Load
+    Interface --> Load
+    Implementation --> Load
+    Load --> Skill["Skill metadata and source code"]
+    Skill --> Prompt["System prompt<br/>Description, interface and api preamble"]
+    Prompt --> Model["Model chooses universe and writes Scala code"]
+    Model --> Call["run_scala_code"]
+    Call --> Resolve["ScalaAgent resolves universe"]
+    Resolve -->|"Unknown universe"| Error["Tool failure"]
+    Resolve -->|"Known universe"| Harness["ReplExec.runCodeHarness"]
+    Skill --> Compile["Compile on demand<br/>Reuse JARs when source hash matches"]
+    Harness --> Compile
+    Compile --> Jars["sigs.jar and impl.jar<br/>Baseline builtins plus selected skill"]
+    Jars --> REPL["Load into REPL and execute predef"]
+    REPL --> Execute["Compile and run generated Scala expression"]
+    Execute --> Format["Builtins format final value<br/>JSON success or execution error"]
+    Format --> History["Tool result added to conversation"]
+    Error --> History
+    History --> Model
+    Execute --> Reset["Reset REPL state after each call"]
+```
+
+Each skill uses four files:
+
+| File | Role |
+| --- | --- |
+| `SKILL.md` | YAML frontmatter supplies the skill's `name` and `description`. The current prompt renderer uses those fields, rather than the Markdown body. |
+| `scripts/Manifest.scala` | Declares `universe` (the tool's selector), `api` (the preamble shown to the model), and optional `predef` (Scala setup code executed before the generated expression). |
+| `scripts/Interface.scala` | Defines the public types and methods shown to the model and compiled into `sigs.jar`. |
+| `scripts/Implementation.scala` | Implements the API, compiled into `impl.jar`; its source is not included in the model prompt. |
+
+For example, the `filesystem` manifest advertises
+`val filesystem: fs.Filesystem = ...` through `api`. Its `predef` actually binds
+that value with `val filesystem: fs.Filesystem = fs.internal.impl`. The model can
+then call `run_scala_code` with `universe = "filesystem"` and
+`scala_code = "filesystem.list(filesystem.pwd())"` without repeating the setup.
+
+Execution compiles the baseline builtins and selected skill as needed, caching
+their JARs under `.agent-runtime/interface/<skill-name>/`. The cache hash covers
+the Scala version, interface, implementation, API preamble, and predef. Keep the
+skill's `name` and `universe` equal: compilation stores JARs by name, while the
+REPL loads them by universe. The `basic` universe skips skill-specific JARs and
+setup but still loads the baseline builtins for result formatting.
+
+Each call starts from the initial REPL state, loads its APIs, evaluates the
+generated expression, and returns a JSON success or failure to the model.
+REPL definitions do not persist between calls; conversation history does.
+External effects performed by a skill, such as writing a file, are not undone
+by resetting the REPL.
+
 ## Model providers
 
 Ollama is the default provider, using `qwen3.6:35b-a3b-coding-nvfp4`
