@@ -6,7 +6,8 @@ import Result.apply as result
 import os.{Path, read, list, exists, isDir}
 import org.virtuslab.yaml.*
 
-type SkillManifest = (universe: String, api: String, predef: Option[String])
+type SkillBinding = (name: String, tpe: String, value: String)
+type SkillManifest = (universe: String, api: String, predef: Option[String], bindings: Seq[SkillBinding])
 
 case class Skill(
     name: String,
@@ -16,7 +17,8 @@ case class Skill(
     code: String,
     api: String,
     predef: Option[String],
-    requiresRuntimeClasspath: Boolean = true
+    requiresRuntimeClasspath: Boolean = true,
+    bindings: Seq[SkillBinding] = Nil
 )
 
 case class SkillMd(
@@ -34,14 +36,15 @@ object Skills {
       universe = "basic",
       interface = "",
       code = "",
-      api = """No additional bindings are preloaded.
-        |Write a Scala expression or block directly; the final expression is returned.
+      api = """No skill-specific capabilities are supplied.
+        |Write a Scala expression or block directly; call `puts(value)` to emit the result.
         |Use little or no internal reasoning for this universe.
         |Keep code short and direct for simple tasks; avoid helper methods unless they materially clarify the computation.
         |When a vague optimization preference is given for a small bounded task, use the straightforward efficient approach; do not debate numeric representation unless it affects the requested result.
         |Do not mention whether standard library or Predef methods are available before calling the tool.
-        |Do not call `println`; the tool prints the final expression automatically.
-        |Example `scala_code`: `List(1, 2, 3).sum`
+        |Do not call global `println`; use `puts(value)` for structured output.
+        |The final expression is discarded. Without an explicit print, successful execution has no output.
+        |Example `scala_code`: `puts(List(1, 2, 3).sum)`
         |""".stripMargin,
       predef = None,
       requiresRuntimeClasspath = false
@@ -76,7 +79,6 @@ object Skills {
     val manifest = parseManifest(readSafely(manifestFile).ok).ok
     val interfaceCode = readSafely(interfaceFile).ok
     val implCode = readSafely(implFile).ok
-    val description = readSafely(skillMd).ok
     Skill(
       name = skill.name,
       description = skill.description,
@@ -84,7 +86,8 @@ object Skills {
       interface = interfaceCode,
       code = implCode,
       api = manifest.api,
-      predef = manifest.predef.filter(_.nonEmpty)
+      predef = manifest.predef.filter(_.nonEmpty),
+      bindings = manifest.bindings
     )
   }
 
@@ -102,9 +105,11 @@ object Skills {
           |```scala
           |${skill.interface}
           |```
-          |before your code is executed, the following preamble is inserted beforehand (DO NOT REPEAT THIS IN YOUR CODE):
-          |```scala
+          |Calling convention:
           |${skill.api}
+          |The harness supplies these named contextual parameters to your function (do not create them yourself):
+          |```scala
+          |${skill.bindings.map(b => s"${b.name}: ${b.tpe}").mkString("(using ", ", ", ")")}
           |```
           |""".stripMargin
         else

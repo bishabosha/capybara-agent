@@ -1,0 +1,3 @@
+extends: [build.ScalaTests, TestModule.Munit]
+mvnDeps:
+  - org.scalameta::munit:1.3.6

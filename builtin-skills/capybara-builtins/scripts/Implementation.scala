@@ -115,14 +115,20 @@ object builtins extends system.Builtins { self =>
           if isKey then asString(raw) else raw
     }
 
-  def evaluateAndPrintFormatted(any: -> into[system.Showable]): Unit =
-    val result = scala.util.Try(any) match
-      case scala.util.Success(value) =>
-        system.ShowableObj(Map(system.Literal("special.success") -> value))
-      case scala.util.Failure(exception) =>
-        system.ShowableObj(
-          Map(system.Literal("special.error") -> baseReflectiveShowable(exception))
-        )
-
-    println(displayShowable(result, isKey = false))
+  private class OutputStreamsImpl(stdout: java.io.PrintStream, stderr: java.io.PrintStream) extends self.OutputStreams {
+    def print(value: into[system.Showable]): Unit =
+      stdout.println(displayShowable(
+        system.ShowableObj(Map(system.Literal("special.success") -> value)),
+        isKey = false
+      ))
+    def printErr(err: into[system.Showable]): Unit =
+      stderr.println(displayShowable(
+        system.ShowableObj(Map(system.Literal("special.error") -> err)),
+        isKey = false
+      ))
+  }
+  /** Only trusted manifest wiring may construct the output capability. */
+  @caps.rejectSafe
+  def outputStreams(stdout: java.io.PrintStream, stderr: java.io.PrintStream): OutputStreams =
+    new OutputStreamsImpl(stdout, stderr)
 }

@@ -90,6 +90,16 @@ object ScalaAgent {
         |Do not choose a skill-specific universe just because the user mentions a path, filename, URL, or command as plain text; choose it only when you must interact with that external resource.
         |Each universe expects its own calling convention.
         |
+        |### Structured Output (available in every universe):
+        |${builtinSkill.api}
+        |The pure builtins API, puts/putsErr helpers, and formatting conversions are imported.
+        |An OutputStreams capability is supplied as an explicit contextual parameter to your function.
+        |Example: `puts(List(1, 2, 3).sum)`.
+        |Do not use global `println`. Uncaught exceptions are caught and reported by the harness.
+        |Tool results preserve separate stdout and stderr arrays. puts writes stdout; putsErr writes stderr.
+        |Writing stderr alone is not execution failure. An executionError reports an uncaught exception or harness failure.
+        |A successful call with no output confirms execution only; it supplies no computed answer.
+        |
         |${renderSkills(availableSkills)}
         |""".stripMargin
   }
@@ -132,8 +142,9 @@ object ScalaAgent {
         |Use universe "basic" for arithmetic, strings, collections, dates, parsing, or other standard-library-only tasks.
         |The system does not have access to side-effecting operations such as file I/O, network I/O, shell commands, or user-visible `println`
         |unless explicitly provided by the requested universe.
-        |Return the desired answer as the final expression.
-        |The tool will also automatically convert any value computed from the expression into a readable format before returning to the user.
+        |Call `puts(value)` explicitly to emit structured output; it is available in every universe.
+        |The final expression is discarded. Without a print call, successful execution produces no output.
+        |Multiple print calls emit multiple values in order. Uncaught exceptions are reported automatically.
         |""".stripMargin
     )
     val request =

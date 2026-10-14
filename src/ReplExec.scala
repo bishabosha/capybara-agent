@@ -2,33 +2,44 @@ package capybara.agent
 
 import dotty.tools.repl.ReplDriver
 import dotty.tools.repl.ReplBytecodeInstrumentation.setStopFlag
-import java.net.URL
-import java.net.URLClassLoader
 import java.nio.file.Paths
-import java.io.PrintStream
+import java.io.{PrintStream, ByteArrayOutputStream}
+import java.nio.charset.StandardCharsets.UTF_8
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference
-import dotty.tools.repl.{State, ParseResult, SyntaxErrors}
+import dotty.tools.repl.{State, ParseResult, SyntaxErrors, ReplCompiler}
 import steps.result.Result, Result.eval.{raise, ok, check}
 import steps.result.Result.apply as result
 import steps.result.Result.task as task
 import dotty.tools.dotc.reporting.Diagnostic
-import scala.util.boundary.Label
+import dotty.tools.dotc.core.Contexts.FreshContext
+import dotty.tools.dotc.core.NameOps.*
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 
 object ReplExec {
   val ScalaVersion = dotty.tools.dotc.config.Properties.versionNumberString
 
-  type ResultBody[+T, +E] = Label[Result.Err[E]] ?=> T
+  case class CodeOutput(stdout: String, stderr: String, failed: Boolean = false)
 
   enum ScalaToolResult:
-    case Success(value: ujson.Value)
-    case Failure(error: ujson.Value)
+    case Success(stdout: Vector[ujson.Value], stderr: Vector[ujson.Value])
+    case Failure(error: ujson.Value, stdout: Vector[ujson.Value] = Vector.empty, stderr: Vector[ujson.Value] = Vector.empty)
+    case NoOutput
 
     def encodeAsJson: String = this match
-      case Success(value) => ujson.write(ujson.Obj("successValue" -> value))
-      case Failure(error) => ujson.write(ujson.Obj("executionError" -> error))
+      case Success(stdout, stderr) =>
+        ujson.write(ujson.Obj("success" -> true, "stdout" -> ujson.Arr.from(stdout), "stderr" -> ujson.Arr.from(stderr)))
+      case Failure(error, stdout, stderr) =>
+        ujson.write(ujson.Obj("executionError" -> error, "stdout" -> ujson.Arr.from(stdout), "stderr" -> ujson.Arr.from(stderr)))
+      case NoOutput => ujson.write(ujson.Obj("success" -> true, "stdout" -> ujson.Arr(), "stderr" -> ujson.Arr()))
+
+  private class StreamCapture:
+    private val bytes = new ByteArrayOutputStream()
+    val stream = new PrintStream(bytes, true, UTF_8)
+    def content: String =
+      stream.flush()
+      bytes.toString(UTF_8)
 
   private object lock
   private object compileLock
@@ -66,7 +77,7 @@ object ReplExec {
         settings = Array(
           "-classpath",
           ScalaClassLoader.getURLs.map(_.toURI().getPath()).mkString(":"),
-          "-language:experimental.safe",
+          "-language:experimental.captureChecking",
           "-Xrepl-interrupt-instrumentation:true",
           "-color:never"
         ),
@@ -75,7 +86,12 @@ object ReplExec {
         extraPredef = ""
       ) {
 
-    var state = initialState
+    // Diagnostics already use the driver's `out`; tool streams are passed explicitly.
+    override protected def redirectOutput: Boolean = false
+
+    var state = initialState.copy(quiet = true)
+    // initialState retains the driver's root context, used to start every new run.
+    private var modeContext = state.context.asInstanceOf[FreshContext]
     private var lastRunFailed = false
     private val activeExecution = AtomicReference[ActiveReplExecution | Null](null)
 
@@ -93,6 +109,21 @@ object ReplExec {
         .find(method => method.getName == "classLoader" && method.getParameterCount == 1)
         .map(_.invoke(rendering, state.context).asInstanceOf[ClassLoader])
         .getOrElse(throw IllegalStateException("Could not access REPL class loader"))
+
+    private def invokeEntryPoint(name: String, stdout: PrintStream, stderr: PrintStream): Boolean =
+      given State = state
+      val loader = currentReplClassLoader
+      val wrapper = ReplCompiler.objectNames(state.objectIndex).encode.toString
+      val entry = Class.forName(wrapper, true, loader)
+        .getMethod(name, classOf[PrintStream], classOf[PrintStream])
+      val thread = Thread.currentThread()
+      val previousLoader = thread.getContextClassLoader
+      try
+        thread.setContextClassLoader(loader)
+        entry.invoke(null, stdout, stderr).asInstanceOf[java.lang.Boolean].booleanValue()
+      catch
+        case error: java.lang.reflect.InvocationTargetException => throw error.getCause
+      finally thread.setContextClassLoader(previousLoader)
 
     private def interruptExecution(execution: ActiveReplExecution): Unit =
       execution.foreachClassLoader { classLoader =>
@@ -139,6 +170,15 @@ object ReplExec {
       given State = state
       lastRunFailed = false
       state = run(code)
+
+    /** Only harness scaffolding is compiled in trusted mode; snippet bodies stay safe. */
+    private def setSafeMode(enabled: Boolean): Unit =
+      val language = if enabled then "experimental.safe" else "experimental.captureChecking"
+      // :settings appends language features, so it cannot turn safe mode back off.
+      val _ = modeContext.setSetting(modeContext.settings.language, Nil)
+      runWithState(s":settings -language:$language")
+      modeContext = state.context.asInstanceOf[FreshContext]
+      ReplOutputStream.clearBuffer()
 
     def renderMessage(message: Diagnostic): String =
       val msg = embedString(message.msg.toString)
@@ -188,15 +228,6 @@ object ReplExec {
             |```
             |""".stripMargin
         )
-      else {
-        // useful debugging below
-        // println(
-        //   s"RAW:${jarOutput}\nLoaded JAR for universe `${skill.universe}` from $jarPath,\nclasspath:\n${state.context.platform
-        //       .classPath(using state.context)
-        //       .asURLs
-        //       .mkString(">  ", "\n>  ", "\n")}"
-        // )
-      }
     }
 
     def loadPredef(skill: Skill): Result[Unit, String] = task {
@@ -230,42 +261,51 @@ object ReplExec {
         skill: Skill,
         scalaCode: String,
         cancellationToken: CancellationToken
-    ): Result[String, String] =
+    ): Result[CodeOutput, String] =
       if cancellationToken.isCancelled then Result.Err("cancelled")
       else
         stateless {
           val uuid = java.util.UUID.randomUUID().toString.replaceAll("-", "_")
           val methodName = s"agentCode_$uuid"
+          val entryName = s"harnessEntry_$uuid"
+          val stdout = new StreamCapture
+          val stderr = new StreamCapture
           val trackedExecution = trackExecution(cancellationToken)
           try
             result {
               loadSkill(builtins).check
-              if skill.requiresRuntimeClasspath then loadSkill(skill).check
+              if skill.requiresRuntimeClasspath && skill.universe != builtins.universe then loadSkill(skill).check
+              val bindings = SkillScaffold.bindings(builtins, skill)
               registerCurrentClassLoader(trackedExecution.execution)
               if cancellationToken.isCancelled then raise("cancelled")
+              setSafeMode(enabled = true)
               val _ = step(
-                s"""def $methodName() = {
-                  |${embedString(scalaCode)}
-                  |}
-                  |""".stripMargin,
-                s"while compiling agent generated code for universe `${skill.universe}`."
+                SkillScaffold.definition(methodName, bindings, scalaCode),
+                s"while compiling code for universe `${skill.universe}`."
               ).ok
               if cancellationToken.isCancelled then raise("cancelled")
-              val output = step(
-                s"""builtins.evaluateAndPrintFormatted($methodName())""",
-                s"while running agent generated code for universe `${skill.universe}`."
+              setSafeMode(enabled = false)
+              val _ = step(
+                SkillScaffold.entryPoint(entryName, methodName, bindings),
+                s"while compiling trusted wiring for universe `${skill.universe}`."
               ).ok
+              registerCurrentClassLoader(trackedExecution.execution)
+              val succeeded = invokeEntryPoint(entryName, stdout.stream, stderr.stream)
               if cancellationToken.isCancelled then raise("cancelled")
-              output
+              CodeOutput(stdout.content, stderr.content, failed = !succeeded)
             }
-          finally trackedExecution.close()
+          finally
+            trackedExecution.close()
+            stdout.stream.close()
+            stderr.stream.close()
         }
 
     def stateless[T](op: => T): T = lock.synchronized {
       try op
       finally
         resetToInitial()
-        state = initialState
+        state = initialState.copy(quiet = true)
+        modeContext = state.context.asInstanceOf[FreshContext]
         ReplOutputStream.clearBuffer()
     }
   }
@@ -301,13 +341,36 @@ object ReplExec {
       skill: Skill,
       scalaCode: String,
       cancellationToken: CancellationToken = CancellationToken.Never
-  ): Result[String, String] = try {
-    ensureCompiled(builtins)
-    if skill.requiresRuntimeClasspath then ensureCompiled(skill)
-    globalSession.runExpression(builtins, skill, scalaCode, cancellationToken)
-  } finally {
-    ReplOutputStream.clearBuffer()
+  ): Result[CodeOutput, String] = lock.synchronized {
+    try
+      ensureCompiled(builtins)
+      if skill.requiresRuntimeClasspath && skill.universe != builtins.universe then ensureCompiled(skill)
+      globalSession.runExpression(builtins, skill, scalaCode, cancellationToken)
+    catch
+      case scala.util.control.NonFatal(error) => Result.Err(error.toString)
+    finally ReplOutputStream.clearBuffer()
   }
+
+  /** Decode each channel independently; stderr output alone does not mean execution failed. */
+  def decodeOutput(output: CodeOutput): ScalaToolResult =
+    def decodeChannel(name: String, text: String): Vector[ujson.Value] =
+      text.linesIterator.filter(_.trim.nonEmpty).map { line =>
+        try
+          val data = ujson.read(line)
+          data.obj.get("special.success").orElse(data.obj.get("special.error")).getOrElse(data)
+        catch
+          case scala.util.control.NonFatal(error) =>
+            throw IllegalArgumentException(s"Failed to parse structured $name output: $line. Error: ${error.getMessage}")
+      }.toVector
+    try
+      val stdout = decodeChannel("stdout", output.stdout)
+      val stderr = decodeChannel("stderr", output.stderr)
+      if output.failed then
+        ScalaToolResult.Failure(stderr.lastOption.getOrElse(ujson.Str("Execution failed")), stdout, stderr)
+      else if stdout.isEmpty && stderr.isEmpty then ScalaToolResult.NoOutput
+      else ScalaToolResult.Success(stdout, stderr)
+    catch
+      case scala.util.control.NonFatal(error) => ScalaToolResult.Failure(error.getMessage)
 
   def ensureCompiled(skill: Skill): Unit =
     if skill.requiresRuntimeClasspath then
@@ -328,7 +391,7 @@ object ReplExec {
   ): Future[ScalaToolResult] =
     def strippedAnsi(str: String): String =
       str.replaceAll("\u001B\\[[;\\d]*m", "")
-    Future[Result[String, String]] {
+    Future[Result[CodeOutput, String]] {
       scala.concurrent.blocking {
         if cancellationToken.isCancelled then Result.Err("cancelled")
         else
@@ -346,22 +409,7 @@ object ReplExec {
         case scala.util.Success(res) =>
           res match
             case Result.Ok(value) =>
-              try
-                val data = ujson.read(value)
-                data.obj.get("special.success") match
-                  case Some(successValue) =>
-                    ScalaToolResult.Success(successValue)
-                  case None =>
-                    data.obj.get("special.error") match
-                      case Some(errorValue) =>
-                        ScalaToolResult.Failure(errorValue)
-                      case None =>
-                        ScalaToolResult.Success(data)
-              catch
-                case err: Exception =>
-                  ScalaToolResult.Failure(
-                    s"Failed to parse output as JSON: ${value}. Error: ${err.getMessage}"
-                  )
+              decodeOutput(value)
             case Result.Err(error) =>
               ScalaToolResult.Failure(strippedAnsi(error))
         case scala.util.Failure(exception) =>
@@ -370,23 +418,24 @@ object ReplExec {
           )
       locally {
         normalized.match
-          case ScalaToolResult.Success(value) =>
-            log.print(
-              s"${Console.GREEN}Result for code chunk [$callId]:\n---\n${value}${Console.RESET}\n"
-            )
-          case ScalaToolResult.Failure(ujson.Str("cancelled")) =>
+          case ScalaToolResult.NoOutput => ()
+          case ScalaToolResult.Success(stdout, stderr) =>
+            logOutputs(stdout, stderr, callId, log)
+          case ScalaToolResult.Failure(ujson.Str("cancelled"), _, _) =>
             ()
-          case ScalaToolResult.Failure(ujson.Str(error)) =>
-            log.print(
-              s"${Console.RED}Error executing code chunk [$callId]:\n---\n${error}${Console.RESET}\n"
-            )
-          case ScalaToolResult.Failure(error) =>
+          case ScalaToolResult.Failure(error, stdout, stderr) =>
+            logOutputs(stdout, stderr, callId, log)
             log.print(
               s"${Console.RED}Error executing code chunk [$callId]:\n---\n${error.render(indent = 2)}${Console.RESET}\n"
             )
       }
       scala.util.Success(normalized)
     })
+
+  private def logOutputs(stdout: Vector[ujson.Value], stderr: Vector[ujson.Value], callId: Int, log: Logger): Unit =
+    for (channel, values, color) <- Seq(("stdout", stdout, Console.GREEN), ("stderr", stderr, Console.RED)) do
+      if values.nonEmpty then
+        log.print(s"${color}$channel for code chunk [$callId]:\n${values.map(_.render()).mkString("\n")}${Console.RESET}\n")
 
   def compileSkill(skill: Skill): os.Path = {
     def digestFrom(strings: String*): String = {
@@ -407,11 +456,12 @@ object ReplExec {
     val targetImplJar = outdir / "impl.jar"
     val existingSigs = scala.util.Try(os.read(outdir / "sigs.hash"))
     val digest =
-      digestFrom(ScalaVersion, skill.interface, skill.code, skill.api, skill.predef.getOrElse(""))
+      digestFrom(ScalaVersion, skill.interface, skill.code, skill.api, skill.predef.getOrElse(""), skill.bindings.toString)
     val shouldWrite = !os.exists(targetSigJar) || !os
       .exists(targetImplJar) || existingSigs.map(_ != digest).getOrElse(true)
     if (shouldWrite) {
-      os.write.over(outdir / "sigs.hash", digest)
+      // A failed rebuild must not leave a cache marker for partially replaced JARs.
+      if os.exists(outdir / "sigs.hash") then os.remove(outdir / "sigs.hash")
       val tempDir = os.pwd / ".agent-runtime" / "temp" / skill.name
       try
         os.makeDir.all(tempDir)
@@ -469,6 +519,7 @@ object ReplExec {
             }
           }
         }
+        os.write.over(outdir / "sigs.hash", digest)
       finally os.remove.all(tempDir)
     }
     outdir

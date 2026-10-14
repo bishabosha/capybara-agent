@@ -3,6 +3,7 @@ mill-build:
     - skills/
     - builtin-skills/
     - .metals/
+    - examples/
 extends: ScalaModule
 scalaVersion: 3.10.0
 repositories: ["https://repo.scala-lang.org/artifactory/maven-nightlies"]

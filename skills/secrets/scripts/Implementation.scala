@@ -21,5 +21,5 @@ class SecretsInterfaceImpl() extends secrets.SecretsInterface, caps.Pure {
 
 }
 
-@assumeSafe
-val impl: secrets.SecretsInterface = SecretsInterfaceImpl()
+@caps.rejectSafe
+def impl(): secrets.SecretsInterface = SecretsInterfaceImpl()
