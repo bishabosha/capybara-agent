@@ -2,6 +2,63 @@
 
 agentic loop based on the ideas presented in https://github.com/lampepfl/tacit 
 
+## Architecture
+
+```mermaid
+flowchart TD
+    User["User"] --> Entry["runAgent: CLI query or interactive Terminal"]
+    Entry --> Session["runSession / continueSession<br/>Conversation history and request limit"]
+    Session --> Agent["ScalaAgent.singleRequest<br/>System prompt and run_scala_code tool"]
+    Agent --> Provider["ModelProvider<br/>Select via CAPYBARA_PROVIDER"]
+
+    subgraph Providers["Streaming model clients"]
+        Ollama["OllamaClient"]
+        Chat["OpenAICompatibleClient<br/>Chat Completions API"]
+        Responses["OpenAIResponsesClient<br/>Responses API"]
+    end
+    Provider --> Ollama
+    Provider --> Chat
+    Provider --> Responses
+    Ollama --> Stream["Shared chunk stream<br/>Text, thinking, tool calls and usage"]
+    Chat --> Stream
+    Responses --> Stream
+    Stream --> Agent
+
+    Agent -->|"run_scala_code: universe + scala_code"| Repl["ReplExec<br/>Compile and execute in Scala REPL"]
+    Repl -->|"JSON success or error"| Agent
+    Agent -->|"Append assistant messages and tool results"| Session
+    Session -->|"Tool calls present: next model request"| Agent
+    Session -->|"No tool calls: turn complete"| Entry
+
+    subgraph SkillsRuntime["Skills and execution runtime"]
+        Files["skills/ and builtin-skills/<br/>SKILL.md, Manifest, Interface, Implementation"]
+        Skills["Skills loader<br/>Basic universe and skill-specific universes"]
+        Jars[".agent-runtime/<br/>Cached interface and implementation JARs"]
+        Files --> Skills
+        Skills -->|"Descriptions and interfaces"| Agent
+        Skills -->|"Selected skill and baseline builtins"| Repl
+        Repl -->|"Compile skills when needed"| Jars
+        Jars -->|"Load JARs and predefs"| Repl
+    end
+
+    Agent -->|"Stream output and tool results"| Logger["Logger / RuntimeStatus"]
+    Logger --> User
+    Session -->|"Record token usage"| Usage["UsageTracker"]
+    Entry -->|"/usage"| Usage
+    Entry -->|"/x or new query"| Cancel["CancellationToken"]
+    Cancel -.-> Agent
+    Cancel -.-> Repl
+```
+
+The session loop keeps conversation history across interactive turns and makes up
+to 16 model requests per turn. `ScalaAgent` exposes a single tool,
+`run_scala_code`, whose `universe` selects the basic Scala/Java environment or a
+loaded skill. `ReplExec` loads baseline builtins plus any selected skill's JARs
+and predefs, then resets the REPL state after each execution. Tool results return
+to the model as conversation messages; streamed output goes to the logger.
+
+## Model providers
+
 Ollama is the default provider, using `qwen3.6:35b-a3b-coding-nvfp4`
 at `http://localhost:11434`. Override the model with `CAPYBARA_MODEL`.
 
