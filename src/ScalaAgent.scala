@@ -136,16 +136,19 @@ object ScalaAgent {
         |The tool will also automatically convert any value computed from the expression into a readable format before returning to the user.
         |""".stripMargin
     )
-    val request = OllamaClient.request(
-      model = Model,
-      messages = OllamaClient.ChatMessage.system(SystemPrompt) +: history,
-      tools = tool.tools,
-      toolParsers = tool.toolParsers,
-      contextWindow = contextWindow,
-      keepAlive = keepAlive,
-      think = think,
-      cancellationToken = cancellationToken
-    )
+    val request =
+      try ModelProvider.request(
+        messages = OllamaClient.ChatMessage.system(SystemPrompt) +: history,
+        tools = tool.tools,
+        toolParsers = tool.toolParsers,
+        contextWindow = contextWindow,
+        keepAlive = keepAlive,
+        think = think,
+        cancellationToken = cancellationToken
+      )
+      catch
+        case scala.util.control.NonFatal(error) =>
+          return Future.successful(Result.Err(error.getMessage))
     val chunks = Promise[
       (
           collected: Result[RawAgentResponse, String],
@@ -352,7 +355,7 @@ object ScalaAgent {
       case ResolvedChunk.Tools(calls) =>
         calls.foreach { case (toolCall, result) =>
           toolCalls += toolCall
-          toolResults += OllamaClient.ChatMessage.tool(toolCall.name, result.encodeAsJson)
+          toolResults += OllamaClient.ChatMessage.tool(toolCall.name, result.encodeAsJson, toolCall.id)
         }
     }
 

@@ -15,8 +15,12 @@ import scala.concurrent.blocking
 import upickle.jsonschema.JsonSchema
 import scala.deriving.Mirror
 import scala.NamedTuple.AnyNamedTuple
+import scala.util.control.NonFatal
 
 object OllamaClient {
+
+  type ToolDefinition =
+    (`type`: String, function: (name: String, parameters: ujson.Value, description: String))
 
   final case class Usage(
       promptEvalCount: Option[Int] = None,
@@ -126,7 +130,7 @@ object OllamaClient {
       new AtomicReference[ChunkOutputState](ChunkOutputState.Running)
     private val listeners =
       new AtomicReference[List[ChunkOutput.ChunkReader[Chunk]]](Nil)
-    private[OllamaClient] def registerListener(
+    private[agent] def registerListener(
         listener: ChunkOutput.ChunkReader[Chunk]
     ) =
       listeners.updateAndGet(listener :: _)
@@ -170,6 +174,13 @@ object OllamaClient {
             listeners.foreach(output.registerListener)
             inner.send().body
           }
+        }.recover {
+          case NonFatal(error) =>
+            val message =
+              if cancellationToken.isCancelled then "cancelled"
+              else s"request failed: ${error.getMessage}"
+            output.fail(message)
+            Result.Err(message)
         }
       else Future.failed(new java.io.IOException("output already done"))
 
@@ -187,7 +198,8 @@ object OllamaClient {
 
   final case class ToolCall[+T](
       name: String,
-      arguments: T
+      arguments: T,
+      id: Option[String] = None
   )
 
   final case class ChatMessage(json: ujson.Value)
@@ -225,7 +237,7 @@ object OllamaClient {
       }
       if thinking.nonEmpty then message("thinking") = thinking
       if toolCalls.nonEmpty then
-        message("tool_calls") = writeJs {
+        val calls = writeJs {
           toolCalls.zipWithIndex.map { case (toolCall, index) =>
             (
               `type` = "function",
@@ -237,17 +249,23 @@ object OllamaClient {
             )
           }
         }
+        toolCalls.zipWithIndex.foreach { case (call, index) =>
+          call.id.foreach(id => calls(index)("id") = ujson.Str(id))
+        }
+        message("tool_calls") = calls
       ChatMessage(message)
     }
 
-    def tool(toolName: String, content: String): ChatMessage =
-      ChatMessage(
+    def tool(toolName: String, content: String, toolCallId: Option[String] = None): ChatMessage =
+      val message = ChatMessage(
         (
           role = "tool",
           tool_name = toolName,
           content = content
         )
       )
+      toolCallId.foreach(id => message.json("tool_call_id") = ujson.Str(id))
+      message
   }
 
   def parseArguments[T](
