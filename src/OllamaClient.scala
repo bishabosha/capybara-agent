@@ -188,12 +188,14 @@ object OllamaClient {
     case Content(content: String)
     case Thinking(thinking: String)
     case Tools(toolCalls: Vector[ToolCall[T]])
+    case ResponseItems(items: Vector[ujson.Value])
   }
 
   enum ResolvedChunk[+T, +R] {
     case Content(content: String) extends ResolvedChunk[Nothing, Nothing]
     case Thinking(thinking: String) extends ResolvedChunk[Nothing, Nothing]
     case Tools(toolCalls: Vector[(ToolCall[T], R)]) extends ResolvedChunk[T, R]
+    case ResponseItems(items: Vector[ujson.Value]) extends ResolvedChunk[Nothing, Nothing]
   }
 
   final case class ToolCall[+T](
@@ -202,7 +204,10 @@ object OllamaClient {
       id: Option[String] = None
   )
 
-  final case class ChatMessage(json: ujson.Value)
+  final case class ChatMessage(
+      json: ujson.Value,
+      responseItems: Option[Vector[ujson.Value]] = None
+  )
 
   object ChatMessage {
     def apply[T <: AnyNamedTuple: Writer](obj: T): ChatMessage =

@@ -27,17 +27,30 @@ object ModelProvider:
           think = think,
           cancellationToken = cancellationToken
         )
-      case "openai" =>
-        OpenAICompatibleClient.request(
-          model = setting("CAPYBARA_MODEL").getOrElse(
-            throw IllegalArgumentException("CAPYBARA_MODEL is required for the openai provider")
-          ),
-          baseUrl = setting("CAPYBARA_BASE_URL").getOrElse("https://api.openai.com/v1"),
-          apiKey = setting("CAPYBARA_API_KEY").orElse(setting("OPENAI_API_KEY")),
+      case provider @ ("openai" | "openai-responses") =>
+        val model = setting("CAPYBARA_MODEL").getOrElse(
+          throw IllegalArgumentException(s"CAPYBARA_MODEL is required for the $provider provider")
+        )
+        val baseUrl = setting("CAPYBARA_BASE_URL").getOrElse("https://api.openai.com/v1")
+        val apiKey = setting("CAPYBARA_API_KEY").orElse(setting("OPENAI_API_KEY"))
+        if provider == "openai-responses" then OpenAIResponsesClient.request(
+          model = model,
+          baseUrl = baseUrl,
+          apiKey = apiKey,
+          messages = messages,
+          tools = tools,
+          toolParsers = toolParsers,
+          cancellationToken = cancellationToken
+        )
+        else OpenAICompatibleClient.request(
+          model = model,
+          baseUrl = baseUrl,
+          apiKey = apiKey,
           messages = messages,
           tools = tools,
           toolParsers = toolParsers,
           cancellationToken = cancellationToken
         )
       case other =>
-        throw IllegalArgumentException(s"Unknown CAPYBARA_PROVIDER '$other'; expected ollama or openai")
+        throw IllegalArgumentException(
+          s"Unknown CAPYBARA_PROVIDER '$other'; expected ollama, openai, or openai-responses")

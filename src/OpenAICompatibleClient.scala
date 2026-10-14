@@ -71,6 +71,16 @@ object OpenAICompatibleClient:
     )
     val output = new ChunkOutput[Chunk[T]]()
     val streaming = client.createChatCompletionAsInputStream(body)
+    val decoder = new StreamDecoder(toolParsers, output)
+    streamRequest(streaming, apiKey, output, decoder.accept, cancellationToken)
+
+  private[agent] def streamRequest[T](
+      streaming: Request[?],
+      apiKey: Option[String],
+      output: ChunkOutput[Chunk[T]],
+      accept: String => Unit,
+      cancellationToken: CancellationToken
+  ): ChunkRequest[Chunk[T]] =
     val authenticated =
       if apiKey.isDefined then streaming
       else streaming.withHeaders(streaming.headers.filterNot(_.name.equalsIgnoreCase("Authorization")))
@@ -78,11 +88,10 @@ object OpenAICompatibleClient:
       val cancellation = cancellationToken.onCancel(stream.close())
       try
         Using.resource(new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) { reader =>
-          val decoder = new StreamDecoder(toolParsers, output)
           val event = new StringBuilder
           def dispatch(): Unit =
             if event.nonEmpty then
-              decoder.accept(event.toString)
+              accept(event.toString)
               event.clear()
           var line = reader.readLine()
           while line != null && output.isRunning && !cancellationToken.isCancelled do
@@ -94,15 +103,15 @@ object OpenAICompatibleClient:
           if cancellationToken.isCancelled then output.close()
           else
             dispatch()
-            if output.isRunning then output.fail("unexpected end of OpenAI completion stream")
+            if output.isRunning then output.fail("unexpected end of OpenAI stream")
         }
       catch
         case NonFatal(error) =>
           if cancellationToken.isCancelled then output.close()
-          else output.fail(s"OpenAI completion stream failed: ${error.getMessage}")
+          else output.fail(s"OpenAI stream failed: ${error.getMessage}")
       finally cancellation.close()
     }.map {
-      case Left(error) => Result.Err(s"OpenAI completion request failed: $error")
+      case Left(error) => Result.Err(s"OpenAI request failed: $error")
       case Right(_) =>
         if cancellationToken.isCancelled then Result.Err("cancelled")
         else Result.Ok(())

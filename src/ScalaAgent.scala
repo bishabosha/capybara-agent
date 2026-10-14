@@ -222,6 +222,7 @@ object ScalaAgent {
         seenAny.set(true)
         var chunkId = -1
         chunk match {
+          case Chunk.ResponseItems(_) => ()
           case Chunk.Content(content) =>
             recordChunk("receiving content", content.length)
             checkThinkingDone()
@@ -307,6 +308,7 @@ object ScalaAgent {
           AgentResponse(
             response.chunks.map({ (id, chunk) =>
               chunk match
+                case Chunk.ResponseItems(items) => ResolvedChunk.ResponseItems(items)
                 case Chunk.Content(content)   => ResolvedChunk.Content(content)
                 case Chunk.Thinking(thinking) => ResolvedChunk.Thinking(thinking)
                 case Chunk.Tools(tool_calls)  =>
@@ -346,8 +348,11 @@ object ScalaAgent {
     val content = new StringBuilder
     val toolCalls = Vector.newBuilder[OllamaClient.ToolCall[ScalaToolCall]]
     val toolResults = Vector.newBuilder[OllamaClient.ChatMessage]
+    var responseItems: Option[Vector[ujson.Value]] = None
 
     chunks.foreach {
+      case ResolvedChunk.ResponseItems(items) =>
+        responseItems = Some(items)
       case ResolvedChunk.Thinking(chunk) =>
         thinking.append(chunk)
       case ResolvedChunk.Content(chunk) =>
@@ -361,13 +366,13 @@ object ScalaAgent {
 
     val accumulatedToolCalls = toolCalls.result()
     val assistant =
-      if thinking.nonEmpty || content.nonEmpty || accumulatedToolCalls.nonEmpty then
+      if thinking.nonEmpty || content.nonEmpty || accumulatedToolCalls.nonEmpty || responseItems.nonEmpty then
         Vector(
           OllamaClient.ChatMessage.assistant(
             thinking = thinking.toString,
             content = content.toString,
             toolCalls = accumulatedToolCalls
-          )
+          ).copy(responseItems = responseItems)
         )
       else Vector.empty
 
