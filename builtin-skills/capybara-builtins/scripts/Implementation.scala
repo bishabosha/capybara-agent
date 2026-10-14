@@ -115,7 +115,7 @@ object builtins extends system.Builtins { self =>
           if isKey then asString(raw) else raw
     }
 
-  def evaluateAndPrintFormatted(any: => into[system.Showable]): Unit =
+  def evaluateAndPrintFormatted(any: -> into[system.Showable]): Unit =
     val result = scala.util.Try(any) match
       case scala.util.Success(value) =>
         system.ShowableObj(Map(system.Literal("special.success") -> value))

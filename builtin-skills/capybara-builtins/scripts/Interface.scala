@@ -7,6 +7,8 @@ import scala.Conversion.into
 import scala.util.Try
 import scala.annotation.publicInBinary
 
+import scala.language.experimental.captureChecking
+
 sealed trait Showable
 class Literal(
     val value: String | Int | Boolean | Long | Unit | Double | Float | Short | Byte | ScalaNumber |
@@ -21,5 +23,5 @@ trait BuiltinsLowPrio extends caps.Pure {
 }
 trait Builtins extends BuiltinsLowPrio {
   // TODO: add "deferred" givens to convert named tuple types
-  def evaluateAndPrintFormatted(any: => into[Showable]): Unit
+  def evaluateAndPrintFormatted(any: -> into[Showable]): Unit
 }
