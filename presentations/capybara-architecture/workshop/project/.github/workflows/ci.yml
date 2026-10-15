@@ -1,0 +1,22 @@
+name: Word count tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fetch source without a credential
+        env:
+          REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git init .
+          git remote add origin "https://github.com/${REPO}.git"
+          git fetch --depth=1 origin "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: Test using the runner's Node
+        run: |
+          node --version
+          node --test test/word-count.test.mjs

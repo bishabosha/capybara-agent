@@ -1,0 +1,287 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>skills/github/scripts/Implementation.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>skills/github/scripts/Implementation.scala</h1><ol><li id='L1'><code>//&gt; using file Interface.scala</code></li>
+<li id='L2'><code>//&gt; using repository ivy2local</code></li>
+<li id='L3'><code>//&gt; using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"</code></li>
+<li id='L4'><code>package githubskill.internal</code></li>
+<li id='L5'><code></code></li>
+<li id='L6'><code>import scala.language.experimental.captureChecking</code></li>
+<li id='L7'><code>import java.net.{URI, Proxy, ProxySelector, SocketAddress}</code></li>
+<li id='L8'><code>import java.net.http.{HttpClient, HttpRequest, HttpResponse}</code></li>
+<li id='L9'><code>import java.nio.charset.StandardCharsets.UTF_8</code></li>
+<li id='L10'><code>import java.time.Duration</code></li>
+<li id='L11'><code>import java.util.Base64</code></li>
+<li id='L12'><code>import scala.util.control.NonFatal</code></li>
+<li id='L13'><code></code></li>
+<li id='L14'><code>/** Small private JSON codec keeps implementation libraries out of the public REPL API. */</code></li>
+<li id='L15'><code>private object Wire:</code></li>
+<li id='L16'><code>  enum Value:</code></li>
+<li id='L17'><code>    case Obj(fields: Map[String, Value])</code></li>
+<li id='L18'><code>    case Arr(elements: Vector[Value])</code></li>
+<li id='L19'><code>    case Str(value: String)</code></li>
+<li id='L20'><code>    case Num(value: BigDecimal)</code></li>
+<li id='L21'><code>    case Bool(value: Boolean)</code></li>
+<li id='L22'><code>    case Null</code></li>
+<li id='L23'><code>    def apply(key: String): Value = this match</code></li>
+<li id='L24'><code>      case Obj(fields) =&gt; fields.getOrElse(key, invalid())</code></li>
+<li id='L25'><code>      case _ =&gt; invalid()</code></li>
+<li id='L26'><code>    def get(key: String): Option[Value] = this match</code></li>
+<li id='L27'><code>      case Obj(fields) =&gt; fields.get(key)</code></li>
+<li id='L28'><code>      case _ =&gt; invalid()</code></li>
+<li id='L29'><code>    def text: String = this match</code></li>
+<li id='L30'><code>      case Str(value) =&gt; value</code></li>
+<li id='L31'><code>      case _ =&gt; invalid()</code></li>
+<li id='L32'><code>    def integer: Int = this match</code></li>
+<li id='L33'><code>      case Num(value) if value.isValidInt =&gt; value.toInt</code></li>
+<li id='L34'><code>      case _ =&gt; invalid()</code></li>
+<li id='L35'><code>    def items: Vector[Value] = this match</code></li>
+<li id='L36'><code>      case Arr(items) =&gt; items</code></li>
+<li id='L37'><code>      case _ =&gt; invalid()</code></li>
+<li id='L38'><code>  import Value.*</code></li>
+<li id='L39'><code>  def invalid(): Nothing = throw IllegalStateException("INVALID_RESPONSE")</code></li>
+<li id='L40'><code>  def obj(fields: (String, Value)*): Value = Obj(fields.toMap)</code></li>
+<li id='L41'><code>  def string(value: String): Value = Str(value)</code></li>
+<li id='L42'><code>  def number(value: Int): Value = Num(BigDecimal(value))</code></li>
+<li id='L43'><code>  def render(value: Value): String = value match</code></li>
+<li id='L44'><code>    case Obj(fields) =&gt; fields.toSeq.sortBy(_._1).map((key, value) =&gt; render(Str(key)) + ":" + render(value)).mkString("{", ",", "}")</code></li>
+<li id='L45'><code>    case Arr(items) =&gt; items.map(render).mkString("[", ",", "]")</code></li>
+<li id='L46'><code>    case Str(text) =&gt; "\"" + text.flatMap {</code></li>
+<li id='L47'><code>      case '"' =&gt; "\\\""</code></li>
+<li id='L48'><code>      case '\\' =&gt; "\\\\"</code></li>
+<li id='L49'><code>      case c if c &lt; ' ' =&gt; f"\\u${c.toInt}%04x"</code></li>
+<li id='L50'><code>      case c =&gt; c.toString</code></li>
+<li id='L51'><code>    } + "\""</code></li>
+<li id='L52'><code>    case Num(value) =&gt; value.toString</code></li>
+<li id='L53'><code>    case Bool(value) =&gt; value.toString</code></li>
+<li id='L54'><code>    case Null =&gt; "null"</code></li>
+<li id='L55'><code>  def parse(source: String): Value =</code></li>
+<li id='L56'><code>    var at = 0</code></li>
+<li id='L57'><code>    def space(): Unit = while at &lt; source.length &amp;&amp; " \r\n\t".contains(source(at)) do at += 1</code></li>
+<li id='L58'><code>    def take(c: Char): Unit =</code></li>
+<li id='L59'><code>      space()</code></li>
+<li id='L60'><code>      if at &gt;= source.length || source(at) != c then invalid()</code></li>
+<li id='L61'><code>      at += 1</code></li>
+<li id='L62'><code>    def text(): String =</code></li>
+<li id='L63'><code>      take('"')</code></li>
+<li id='L64'><code>      val result = new StringBuilder</code></li>
+<li id='L65'><code>      var done = false</code></li>
+<li id='L66'><code>      while !done &amp;&amp; at &lt; source.length do</code></li>
+<li id='L67'><code>        val c = source(at)</code></li>
+<li id='L68'><code>        at += 1</code></li>
+<li id='L69'><code>        if c == '"' then done = true</code></li>
+<li id='L70'><code>        else if c == '\\' then</code></li>
+<li id='L71'><code>          if at &gt;= source.length then invalid()</code></li>
+<li id='L72'><code>          val escaped = source(at)</code></li>
+<li id='L73'><code>          at += 1</code></li>
+<li id='L74'><code>          escaped match</code></li>
+<li id='L75'><code>            case '"' | '\\' | '/' =&gt; result.append(escaped)</code></li>
+<li id='L76'><code>            case 'b' =&gt; result.append('\b')</code></li>
+<li id='L77'><code>            case 'f' =&gt; result.append('\f')</code></li>
+<li id='L78'><code>            case 'n' =&gt; result.append('\n')</code></li>
+<li id='L79'><code>            case 'r' =&gt; result.append('\r')</code></li>
+<li id='L80'><code>            case 't' =&gt; result.append('\t')</code></li>
+<li id='L81'><code>            case 'u' =&gt;</code></li>
+<li id='L82'><code>              if at + 4 &gt; source.length || !source.substring(at, at + 4).matches("[0-9a-fA-F]{4}") then invalid()</code></li>
+<li id='L83'><code>              result.append(Integer.parseInt(source.substring(at, at + 4), 16).toChar)</code></li>
+<li id='L84'><code>              at += 4</code></li>
+<li id='L85'><code>            case _ =&gt; invalid()</code></li>
+<li id='L86'><code>        else if c &lt; ' ' then invalid()</code></li>
+<li id='L87'><code>        else result.append(c)</code></li>
+<li id='L88'><code>      if !done then invalid()</code></li>
+<li id='L89'><code>      result.toString</code></li>
+<li id='L90'><code>    def value(depth: Int): Value =</code></li>
+<li id='L91'><code>      space()</code></li>
+<li id='L92'><code>      if depth &gt; 64 || at &gt;= source.length then invalid()</code></li>
+<li id='L93'><code>      source(at) match</code></li>
+<li id='L94'><code>        case '"' =&gt; Str(text())</code></li>
+<li id='L95'><code>        case '{' =&gt;</code></li>
+<li id='L96'><code>          take('{')</code></li>
+<li id='L97'><code>          space()</code></li>
+<li id='L98'><code>          var fields = Map.empty[String, Value]</code></li>
+<li id='L99'><code>          if at &lt; source.length &amp;&amp; source(at) != '}' then</code></li>
+<li id='L100'><code>            var more = true</code></li>
+<li id='L101'><code>            while more do</code></li>
+<li id='L102'><code>              val key = text()</code></li>
+<li id='L103'><code>              if fields.contains(key) then invalid()</code></li>
+<li id='L104'><code>              take(':')</code></li>
+<li id='L105'><code>              fields += key -&gt; value(depth + 1)</code></li>
+<li id='L106'><code>              space()</code></li>
+<li id='L107'><code>              more = at &lt; source.length &amp;&amp; source(at) == ','</code></li>
+<li id='L108'><code>              if more then at += 1</code></li>
+<li id='L109'><code>          take('}')</code></li>
+<li id='L110'><code>          Obj(fields)</code></li>
+<li id='L111'><code>        case '[' =&gt;</code></li>
+<li id='L112'><code>          take('[')</code></li>
+<li id='L113'><code>          space()</code></li>
+<li id='L114'><code>          val items = Vector.newBuilder[Value]</code></li>
+<li id='L115'><code>          if at &lt; source.length &amp;&amp; source(at) != ']' then</code></li>
+<li id='L116'><code>            var more = true</code></li>
+<li id='L117'><code>            while more do</code></li>
+<li id='L118'><code>              items += value(depth + 1)</code></li>
+<li id='L119'><code>              space()</code></li>
+<li id='L120'><code>              more = at &lt; source.length &amp;&amp; source(at) == ','</code></li>
+<li id='L121'><code>              if more then at += 1</code></li>
+<li id='L122'><code>          take(']')</code></li>
+<li id='L123'><code>          Arr(items.result())</code></li>
+<li id='L124'><code>        case _ =&gt;</code></li>
+<li id='L125'><code>          val token = source.substring(at).takeWhile(c =&gt; !" \r\n\t,]}".contains(c))</code></li>
+<li id='L126'><code>          at += token.length</code></li>
+<li id='L127'><code>          token match</code></li>
+<li id='L128'><code>            case "true" =&gt; Bool(true)</code></li>
+<li id='L129'><code>            case "false" =&gt; Bool(false)</code></li>
+<li id='L130'><code>            case "null" =&gt; Null</code></li>
+<li id='L131'><code>            case n if n.matches("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?") =&gt; Num(BigDecimal(n))</code></li>
+<li id='L132'><code>            case _ =&gt; invalid()</code></li>
+<li id='L133'><code>    val result = value(0)</code></li>
+<li id='L134'><code>    space()</code></li>
+<li id='L135'><code>    if at != source.length then invalid()</code></li>
+<li id='L136'><code>    result</code></li>
+<li id='L137'><code></code></li>
+<li id='L138'><code>private class GitHubImpl(repository: String, base: String, token: String, endpoint: String) extends githubskill.GitHub:</code></li>
+<li id='L139'><code>  import Wire.*</code></li>
+<li id='L140'><code>  import Wire.Value.*</code></li>
+<li id='L141'><code>  private class PolicyError(code: String) extends IllegalStateException(code)</code></li>
+<li id='L142'><code>  private def requirePolicy(ok: Boolean, code: String): Unit = if !ok then throw PolicyError(code)</code></li>
+<li id='L143'><code>  requirePolicy(repository.matches("[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"), "INVALID_REPOSITORY")</code></li>
+<li id='L144'><code>  requirePolicy(base.matches("[A-Za-z0-9][A-Za-z0-9_./-]*") &amp;&amp; !base.contains(".."), "INVALID_BRANCH")</code></li>
+<li id='L145'><code>  requirePolicy(token.length &gt;= 16 &amp;&amp; token.length &lt;= 4096 &amp;&amp; !token.exists(_.isWhitespace), "AUTH_FAILED")</code></li>
+<li id='L146'><code>  private val forbidden = Vector(token, Base64.getEncoder.encodeToString(token.getBytes(UTF_8)),</code></li>
+<li id='L147'><code>    token.getBytes(UTF_8).iterator.map(b =&gt; f"${b &amp; 0xff}%02x").mkString)</code></li>
+<li id='L148'><code>  private val secret = "(?s).*(LAB_ONLY_CANARY_|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]{16,}|-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----|sk-[A-Za-z0-9_-]{16,}).*".r</code></li>
+<li id='L149'><code>  private def publicText(text: String, limit: Int = 1048576): String =</code></li>
+<li id='L150'><code>    requirePolicy(text.getBytes(UTF_8).length &lt;= limit &amp;&amp; !forbidden.exists(text.contains) &amp;&amp;</code></li>
+<li id='L151'><code>      !secret.matches(text) &amp;&amp; !text.exists(c =&gt; c &lt; ' ' &amp;&amp; !"\n\r\t".contains(c)), "CONTENT_DENIED")</code></li>
+<li id='L152'><code>    text</code></li>
+<li id='L153'><code>  private val noProxy = new ProxySelector:</code></li>
+<li id='L154'><code>    def select(uri: URI): java.util.List[Proxy] = java.util.List.of(Proxy.NO_PROXY)</code></li>
+<li id='L155'><code>    def connectFailed(uri: URI, address: SocketAddress, error: java.io.IOException): Unit = ()</code></li>
+<li id='L156'><code>  private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20))</code></li>
+<li id='L157'><code>    .followRedirects(HttpClient.Redirect.NEVER).proxy(noProxy).build()</code></li>
+<li id='L158'><code>  private def request(method: String, suffix: String, body: Value = Null): Value =</code></li>
+<li id='L159'><code>    val payload = if body == Null then "" else publicText(render(body), 2097152)</code></li>
+<li id='L160'><code>    val publisher = if body == Null then HttpRequest.BodyPublishers.noBody()</code></li>
+<li id='L161'><code>      else HttpRequest.BodyPublishers.ofString(payload, UTF_8)</code></li>
+<li id='L162'><code>    val req = HttpRequest.newBuilder(URI.create(endpoint + "/repos/" + repository + suffix))</code></li>
+<li id='L163'><code>      .timeout(Duration.ofSeconds(30)).header("Authorization", "Bearer " + token)</code></li>
+<li id='L164'><code>      .header("Accept", "application/vnd.github+json").header("Content-Type", "application/json")</code></li>
+<li id='L165'><code>      .header("X-GitHub-Api-Version", "2026-03-10").header("User-Agent", "capybara-agent")</code></li>
+<li id='L166'><code>      .method(method, publisher).build()</code></li>
+<li id='L167'><code>    try</code></li>
+<li id='L168'><code>      val response = client.send(req, HttpResponse.BodyHandlers.ofInputStream())</code></li>
+<li id='L169'><code>      val input = response.body()</code></li>
+<li id='L170'><code>      try</code></li>
+<li id='L171'><code>        requirePolicy(Set(200, 201)(response.statusCode()), response.statusCode() match</code></li>
+<li id='L172'><code>          case 401 =&gt; "AUTH_FAILED"</code></li>
+<li id='L173'><code>          case 404 =&gt; "NOT_FOUND"</code></li>
+<li id='L174'><code>          case 409 | 422 =&gt; "CONFLICT"</code></li>
+<li id='L175'><code>          case 429 =&gt; "RATE_LIMITED"</code></li>
+<li id='L176'><code>          case _ =&gt; "GITHUB_REQUEST_REJECTED")</code></li>
+<li id='L177'><code>        val bytes = input.readNBytes(8388609)</code></li>
+<li id='L178'><code>        requirePolicy(bytes.length &lt;= 8388608, "INVALID_RESPONSE")</code></li>
+<li id='L179'><code>        parse(new String(bytes, UTF_8))</code></li>
+<li id='L180'><code>      finally input.close()</code></li>
+<li id='L181'><code>    catch</code></li>
+<li id='L182'><code>      case error: PolicyError =&gt; throw error</code></li>
+<li id='L183'><code>      case error: IllegalStateException if error.getMessage == "INVALID_RESPONSE" =&gt; throw error</code></li>
+<li id='L184'><code>      case NonFatal(_) =&gt; throw PolicyError("GITHUB_UNAVAILABLE")</code></li>
+<li id='L185'><code>  private def validSha(value: String): String =</code></li>
+<li id='L186'><code>    requirePolicy(value.matches("[0-9a-f]{40}"), "INVALID_RESPONSE")</code></li>
+<li id='L187'><code>    value</code></li>
+<li id='L188'><code>  private def topic(name: String): String =</code></li>
+<li id='L189'><code>    requirePolicy(name.startsWith("capybara/") &amp;&amp; name != base &amp;&amp;</code></li>
+<li id='L190'><code>      name.matches("[A-Za-z0-9][A-Za-z0-9_/-]*") &amp;&amp; !name.contains("//"), "INVALID_BRANCH")</code></li>
+<li id='L191'><code>    name</code></li>
+<li id='L192'><code>  private def head(name: String): String = validSha(request("GET", "/git/ref/heads/" + name)("object")("sha").text)</code></li>
+<li id='L193'><code>  private def current(branch: githubskill.Branch): Unit =</code></li>
+<li id='L194'><code>    requirePolicy(head(topic(branch.name)) == validSha(branch.commit), "BRANCH_CHANGED")</code></li>
+<li id='L195'><code></code></li>
+<li id='L196'><code>  def lookupIssue(number: Int): githubskill.Issue =</code></li>
+<li id='L197'><code>    requirePolicy(number &gt; 0, "INVALID_REQUEST")</code></li>
+<li id='L198'><code>    val item = request("GET", s"/issues/$number")</code></li>
+<li id='L199'><code>    requirePolicy(item("number").integer == number &amp;&amp; item.get("pull_request").isEmpty, "INVALID_RESPONSE")</code></li>
+<li id='L200'><code>    val body = item.get("body").filter(_ != Null).map(_.text).getOrElse("")</code></li>
+<li id='L201'><code>    githubskill.Issue(number, publicText(item("title").text, 4096), publicText(body),</code></li>
+<li id='L202'><code>      s"https://github.com/$repository/issues/$number")</code></li>
+<li id='L203'><code></code></li>
+<li id='L204'><code>  def listIssues(page: Int): Seq[githubskill.IssueSummary] =</code></li>
+<li id='L205'><code>    requirePolicy(page &gt; 0 &amp;&amp; page &lt;= 1000, "INVALID_REQUEST")</code></li>
+<li id='L206'><code>    val items = request("GET", s"/issues?state=open&amp;per_page=25&amp;page=$page").items</code></li>
+<li id='L207'><code>    requirePolicy(items.size &lt;= 25, "INVALID_RESPONSE")</code></li>
+<li id='L208'><code>    items.filter(_.get("pull_request").isEmpty).map { item =&gt;</code></li>
+<li id='L209'><code>      val n = item("number").integer</code></li>
+<li id='L210'><code>      requirePolicy(n &gt; 0, "INVALID_RESPONSE")</code></li>
+<li id='L211'><code>      githubskill.IssueSummary(n, publicText(item("title").text, 4096), s"https://github.com/$repository/issues/$n")</code></li>
+<li id='L212'><code>    }</code></li>
+<li id='L213'><code></code></li>
+<li id='L214'><code>  def branch(name: String): githubskill.Branch = githubskill.Branch(topic(name), head(topic(name)))</code></li>
+<li id='L215'><code></code></li>
+<li id='L216'><code>  def createBranch(name: String): githubskill.Branch =</code></li>
+<li id='L217'><code>    topic(name)</code></li>
+<li id='L218'><code>    val commit = head(base)</code></li>
+<li id='L219'><code>    val _ = request("POST", "/git/refs", obj("ref" -&gt; Str("refs/heads/" + name), "sha" -&gt; Str(commit)))</code></li>
+<li id='L220'><code>    githubskill.Branch(name, commit)</code></li>
+<li id='L221'><code></code></li>
+<li id='L222'><code>  def commit(branch: githubskill.Branch, message: String, paths: Seq[String])</code></li>
+<li id='L223'><code>      (using files: editing.TextFiles): githubskill.Branch =</code></li>
+<li id='L224'><code>    publicText(message, 4096)</code></li>
+<li id='L225'><code>    requirePolicy(message.trim.nonEmpty &amp;&amp; paths.nonEmpty &amp;&amp; paths.size &lt;= 64 &amp;&amp; paths.distinct.size == paths.size, "INVALID_REQUEST")</code></li>
+<li id='L226'><code>    val changes = paths.map { path =&gt;</code></li>
+<li id='L227'><code>      requirePolicy(!path.startsWith(".") &amp;&amp; !path.split('/').exists(p =&gt; p.isEmpty || p == ".." || p.startsWith(".")), "PATH_DENIED")</code></li>
+<li id='L228'><code>      val content = publicText(files.read(path))</code></li>
+<li id='L229'><code>      obj("path" -&gt; Str(path), "mode" -&gt; Str("100644"), "type" -&gt; Str("blob"), "content" -&gt; Str(content))</code></li>
+<li id='L230'><code>    }</code></li>
+<li id='L231'><code>    // Validate every file and the full payload before any remote write.</code></li>
+<li id='L232'><code>    val patch = Arr(changes.toVector)</code></li>
+<li id='L233'><code>    publicText(render(patch), 2097152)</code></li>
+<li id='L234'><code>    current(branch)</code></li>
+<li id='L235'><code>    val baseTree = validSha(request("GET", "/git/commits/" + branch.commit)("tree")("sha").text)</code></li>
+<li id='L236'><code>    val tree = validSha(request("POST", "/git/trees", obj("base_tree" -&gt; Str(baseTree), "tree" -&gt; patch))("sha").text)</code></li>
+<li id='L237'><code>    val commit = validSha(request("POST", "/git/commits", obj("message" -&gt; Str(message),</code></li>
+<li id='L238'><code>      "tree" -&gt; Str(tree), "parents" -&gt; Arr(Vector(Str(branch.commit)))))("sha").text)</code></li>
+<li id='L239'><code>    val _ = request("PATCH", "/git/refs/heads/" + branch.name, obj("sha" -&gt; Str(commit), "force" -&gt; Bool(false)))</code></li>
+<li id='L240'><code>    githubskill.Branch(branch.name, commit)</code></li>
+<li id='L241'><code></code></li>
+<li id='L242'><code>  def createPullRequest(branch: githubskill.Branch, title: String, body: String): githubskill.PullRequest =</code></li>
+<li id='L243'><code>    publicText(title, 256)</code></li>
+<li id='L244'><code>    publicText(body)</code></li>
+<li id='L245'><code>    requirePolicy(title.trim.nonEmpty, "INVALID_REQUEST")</code></li>
+<li id='L246'><code>    current(branch)</code></li>
+<li id='L247'><code>    val owner = repository.takeWhile(_ != '/')</code></li>
+<li id='L248'><code>    val existing = request("GET", s"/pulls?state=open&amp;head=$owner:${branch.name}&amp;base=$base&amp;per_page=100").items</code></li>
+<li id='L249'><code>    val matching = existing.filter(item =&gt; item("head")("ref").text == branch.name &amp;&amp;</code></li>
+<li id='L250'><code>      item("head")("sha").text == branch.commit &amp;&amp; item("base")("ref").text == base &amp;&amp;</code></li>
+<li id='L251'><code>      item("head")("repo")("full_name").text.equalsIgnoreCase(repository))</code></li>
+<li id='L252'><code>    requirePolicy(matching.size &lt;= 1, "INVALID_RESPONSE")</code></li>
+<li id='L253'><code>    val item = matching.headOption.getOrElse(request("POST", "/pulls", obj("title" -&gt; Str(title),</code></li>
+<li id='L254'><code>      "body" -&gt; Str(body), "head" -&gt; Str(branch.name), "base" -&gt; Str(base),</code></li>
+<li id='L255'><code>      "draft" -&gt; Bool(true), "maintainer_can_modify" -&gt; Bool(false))))</code></li>
+<li id='L256'><code>    val number = item("number").integer</code></li>
+<li id='L257'><code>    requirePolicy(number &gt; 0, "INVALID_RESPONSE")</code></li>
+<li id='L258'><code>    githubskill.PullRequest(number, s"https://github.com/$repository/pull/$number")</code></li>
+<li id='L259'><code></code></li>
+<li id='L260'><code>  def checks(branch: githubskill.Branch): githubskill.CheckSummary =</code></li>
+<li id='L261'><code>    current(branch)</code></li>
+<li id='L262'><code>    val statuses = request("GET", s"/commits/${branch.commit}/status?per_page=100")</code></li>
+<li id='L263'><code>    val checks = request("GET", s"/commits/${branch.commit}/check-runs?per_page=100")</code></li>
+<li id='L264'><code>    val runs = checks("check_runs").items</code></li>
+<li id='L265'><code>    requirePolicy(checks("total_count").integer == runs.size &amp;&amp; statuses("total_count").integer &lt;= 100, "INVALID_RESPONSE")</code></li>
+<li id='L266'><code>    val count = statuses("total_count").integer</code></li>
+<li id='L267'><code>    val failed = Set("failure", "error")(statuses("state").text) || runs.exists(r =&gt;</code></li>
+<li id='L268'><code>      r.get("conclusion").filter(_ != Null).exists(c =&gt; Set("failure", "cancelled", "timed_out", "action_required")(c.text)))</code></li>
+<li id='L269'><code>    val passed = (runs.nonEmpty || count &gt; 0) &amp;&amp; (count == 0 || statuses("state").text == "success") &amp;&amp;</code></li>
+<li id='L270'><code>      runs.forall(r =&gt; r("head_sha").text == branch.commit &amp;&amp; r("status").text == "completed" &amp;&amp; r("conclusion").text == "success")</code></li>
+<li id='L271'><code>    githubskill.CheckSummary(branch.commit, if failed then "failed" else if passed then "passed" else "pending")</code></li>
+<li id='L272'><code></code></li>
+<li id='L273'><code>  override def toString: String = "GitHub(&lt;capability&gt;)"</code></li>
+<li id='L274'><code></code></li>
+<li id='L275'><code>@caps.rejectSafe</code></li>
+<li id='L276'><code>def impl(): githubskill.GitHub =</code></li>
+<li id='L277'><code>  val repository = sys.env.getOrElse("CAPYBARA_GITHUB_REPOSITORY", throw IllegalStateException("NOT_CONFIGURED"))</code></li>
+<li id='L278'><code>  val token = sys.env.getOrElse("CAPYBARA_GITHUB_TOKEN", throw IllegalStateException("AUTH_FAILED"))</code></li>
+<li id='L279'><code>  configured(repository, sys.env.getOrElse("CAPYBARA_GITHUB_BASE", "main"), token, "https://api.github.com")</code></li>
+<li id='L280'><code></code></li>
+<li id='L281'><code>/** Only trusted wiring can replace the endpoint, e.g. a deterministic test server. */</code></li>
+<li id='L282'><code>@caps.rejectSafe</code></li>
+<li id='L283'><code>def configured(repository: String, base: String, token: String, endpoint: String): githubskill.GitHub =</code></li>
+<li id='L284'><code>  new GitHubImpl(repository, base, token, endpoint)</code></li></ol></html>

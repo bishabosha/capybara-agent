@@ -1,0 +1,95 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>skills/coding/scripts/Implementation.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>skills/coding/scripts/Implementation.scala</h1><ol><li id='L1'><code>//&gt; using file Interface.scala</code></li>
+<li id='L2'><code>package editing.internal</code></li>
+<li id='L3'><code></code></li>
+<li id='L4'><code>import scala.language.experimental.captureChecking</code></li>
+<li id='L5'><code>import java.nio.charset.StandardCharsets.UTF_8</code></li>
+<li id='L6'><code>import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}</code></li>
+<li id='L7'><code>import scala.jdk.CollectionConverters.*</code></li>
+<li id='L8'><code>import scala.util.control.NonFatal</code></li>
+<li id='L9'><code></code></li>
+<li id='L10'><code>/** The trusted implementation supplies file effects; snippets receive only TextFiles. */</code></li>
+<li id='L11'><code>private class TextFilesImpl(workspace: String) extends editing.TextFiles {</code></li>
+<li id='L12'><code>  private val root = Path.of(workspace).toRealPath()</code></li>
+<li id='L13'><code>  private val maximumBytes = 1024 * 1024</code></li>
+<li id='L14'><code>  private class FileError(code: String) extends IllegalStateException(code)</code></li>
+<li id='L15'><code></code></li>
+<li id='L16'><code>  private def checked[A](action: =&gt; A): A =</code></li>
+<li id='L17'><code>    try action</code></li>
+<li id='L18'><code>    catch</code></li>
+<li id='L19'><code>      case error: FileError =&gt; throw error</code></li>
+<li id='L20'><code>      case NonFatal(_) =&gt; throw FileError("FILE_OPERATION_FAILED")</code></li>
+<li id='L21'><code></code></li>
+<li id='L22'><code>  private def resolve(name: String): Path =</code></li>
+<li id='L23'><code>    val relative = Path.of(name)</code></li>
+<li id='L24'><code>    if relative.isAbsolute || relative.iterator().asScala.exists(_.toString == "..") then</code></li>
+<li id='L25'><code>      throw FileError("PATH_DENIED")</code></li>
+<li id='L26'><code>    val path = root.resolve(relative).normalize()</code></li>
+<li id='L27'><code>    if !path.startsWith(root) then throw FileError("PATH_DENIED")</code></li>
+<li id='L28'><code>    var component = root</code></li>
+<li id='L29'><code>    for part &lt;- root.relativize(path).iterator().asScala do</code></li>
+<li id='L30'><code>      component = component.resolve(part)</code></li>
+<li id='L31'><code>      if Files.isSymbolicLink(component) then throw FileError("PATH_DENIED")</code></li>
+<li id='L32'><code>    path</code></li>
+<li id='L33'><code></code></li>
+<li id='L34'><code>  private def regular(path: Path): Unit =</code></li>
+<li id='L35'><code>    if !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) then throw FileError("NOT_A_TEXT_FILE")</code></li>
+<li id='L36'><code></code></li>
+<li id='L37'><code>  def list(path: String): Seq[String] = checked {</code></li>
+<li id='L38'><code>    val directory = resolve(path)</code></li>
+<li id='L39'><code>    val stream = Files.newDirectoryStream(directory)</code></li>
+<li id='L40'><code>    try stream.iterator().asScala.toVector</code></li>
+<li id='L41'><code>      .filterNot(Files.isSymbolicLink(_))</code></li>
+<li id='L42'><code>      .map(root.relativize(_).toString.replace(java.io.File.separatorChar, '/')).sorted</code></li>
+<li id='L43'><code>    finally stream.close()</code></li>
+<li id='L44'><code>  }</code></li>
+<li id='L45'><code></code></li>
+<li id='L46'><code>  def read(path: String): String = checked {</code></li>
+<li id='L47'><code>    val target = resolve(path)</code></li>
+<li id='L48'><code>    regular(target)</code></li>
+<li id='L49'><code>    val input = Files.newInputStream(target, LinkOption.NOFOLLOW_LINKS)</code></li>
+<li id='L50'><code>    val bytes = try input.readNBytes(maximumBytes + 1) finally input.close()</code></li>
+<li id='L51'><code>    if bytes.length &gt; maximumBytes then throw FileError("FILE_TOO_LARGE")</code></li>
+<li id='L52'><code>    UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString</code></li>
+<li id='L53'><code>  }</code></li>
+<li id='L54'><code></code></li>
+<li id='L55'><code>  private def store(path: String, text: String): Unit =</code></li>
+<li id='L56'><code>    val bytes = text.getBytes(UTF_8)</code></li>
+<li id='L57'><code>    if bytes.length &gt; maximumBytes then throw FileError("FILE_TOO_LARGE")</code></li>
+<li id='L58'><code>    val target = resolve(path)</code></li>
+<li id='L59'><code>    if target == root then throw FileError("PATH_DENIED")</code></li>
+<li id='L60'><code>    if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then regular(target)</code></li>
+<li id='L61'><code>    val parent = target.getParent</code></li>
+<li id='L62'><code>    if !Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS) then throw FileError("PARENT_NOT_FOUND")</code></li>
+<li id='L63'><code>    val temporary = Files.createTempFile(parent, ".capybara-edit-", ".tmp")</code></li>
+<li id='L64'><code>    try</code></li>
+<li id='L65'><code>      val _ = Files.write(temporary, bytes)</code></li>
+<li id='L66'><code>      if Files.exists(target) &amp;&amp; Files.getFileStore(target).supportsFileAttributeView("posix") then</code></li>
+<li id='L67'><code>        val _ = Files.setPosixFilePermissions(temporary,</code></li>
+<li id='L68'><code>          Files.getPosixFilePermissions(target, LinkOption.NOFOLLOW_LINKS))</code></li>
+<li id='L69'><code>      // A new inode avoids modifying another file through a hard-linked destination.</code></li>
+<li id='L70'><code>      val _ = Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)</code></li>
+<li id='L71'><code>    finally</code></li>
+<li id='L72'><code>      val _ = Files.deleteIfExists(temporary)</code></li>
+<li id='L73'><code></code></li>
+<li id='L74'><code>  def write(path: String, text: String): Unit = checked { store(path, text) }</code></li>
+<li id='L75'><code></code></li>
+<li id='L76'><code>  def replace(path: String, expected: String, next: String): Unit = checked {</code></li>
+<li id='L77'><code>    if read(path) != expected then throw FileError("CONTENT_CHANGED")</code></li>
+<li id='L78'><code>    store(path, next)</code></li>
+<li id='L79'><code>  }</code></li>
+<li id='L80'><code></code></li>
+<li id='L81'><code>  def edit(path: String)(transform: String -&gt; String): Unit =</code></li>
+<li id='L82'><code>    val before = read(path)</code></li>
+<li id='L83'><code>    replace(path, before, transform(before))</code></li>
+<li id='L84'><code>}</code></li>
+<li id='L85'><code></code></li>
+<li id='L86'><code>@caps.rejectSafe</code></li>
+<li id='L87'><code>def impl(): editing.TextFiles =</code></li>
+<li id='L88'><code>  configured(sys.env.getOrElse("CAPYBARA_CODING_ROOT", Path.of("").toAbsolutePath.toString))</code></li>
+<li id='L89'><code></code></li>
+<li id='L90'><code>/** Only trusted harness wiring can select the workspace. */</code></li>
+<li id='L91'><code>@caps.rejectSafe</code></li>
+<li id='L92'><code>def configured(root: String): editing.TextFiles = new TextFilesImpl(root)</code></li></ol></html>

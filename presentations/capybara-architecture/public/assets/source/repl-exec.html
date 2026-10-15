@@ -1,0 +1,579 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>src/ReplExec.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>src/ReplExec.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import dotty.tools.repl.ReplDriver</code></li>
+<li id='L4'><code>import dotty.tools.repl.ReplBytecodeInstrumentation.setStopFlag</code></li>
+<li id='L5'><code>import java.nio.file.Paths</code></li>
+<li id='L6'><code>import java.io.{PrintStream, ByteArrayOutputStream}</code></li>
+<li id='L7'><code>import java.nio.charset.StandardCharsets.UTF_8</code></li>
+<li id='L8'><code>import java.util.concurrent.ConcurrentLinkedQueue</code></li>
+<li id='L9'><code>import java.util.concurrent.atomic.AtomicReference</code></li>
+<li id='L10'><code>import dotty.tools.repl.{State, ParseResult, SyntaxErrors, ReplCompiler}</code></li>
+<li id='L11'><code>import steps.result.Result, Result.eval.{raise, ok, check}</code></li>
+<li id='L12'><code>import steps.result.Result.apply as result</code></li>
+<li id='L13'><code>import steps.result.Result.task as task</code></li>
+<li id='L14'><code>import dotty.tools.dotc.reporting.Diagnostic</code></li>
+<li id='L15'><code>import dotty.tools.dotc.core.Contexts.FreshContext</code></li>
+<li id='L16'><code>import dotty.tools.dotc.core.NameOps.*</code></li>
+<li id='L17'><code>import scala.concurrent.ExecutionContext</code></li>
+<li id='L18'><code>import scala.concurrent.Future</code></li>
+<li id='L19'><code></code></li>
+<li id='L20'><code>object ReplExec {</code></li>
+<li id='L21'><code>  val ScalaVersion = dotty.tools.dotc.config.Properties.versionNumberString</code></li>
+<li id='L22'><code></code></li>
+<li id='L23'><code>  case class CodeOutput(stdout: String, stderr: String, failed: Boolean = false)</code></li>
+<li id='L24'><code></code></li>
+<li id='L25'><code>  enum ScalaToolResult:</code></li>
+<li id='L26'><code>    case Success(stdout: Vector[ujson.Value], stderr: Vector[ujson.Value])</code></li>
+<li id='L27'><code>    case Failure(error: ujson.Value, stdout: Vector[ujson.Value] = Vector.empty, stderr: Vector[ujson.Value] = Vector.empty)</code></li>
+<li id='L28'><code>    case NoOutput</code></li>
+<li id='L29'><code></code></li>
+<li id='L30'><code>    def encodeAsJson: String = this match</code></li>
+<li id='L31'><code>      case Success(stdout, stderr) =&gt;</code></li>
+<li id='L32'><code>        ujson.write(ujson.Obj("success" -&gt; true, "stdout" -&gt; ujson.Arr.from(stdout), "stderr" -&gt; ujson.Arr.from(stderr)))</code></li>
+<li id='L33'><code>      case Failure(error, stdout, stderr) =&gt;</code></li>
+<li id='L34'><code>        ujson.write(ujson.Obj("executionError" -&gt; error, "stdout" -&gt; ujson.Arr.from(stdout), "stderr" -&gt; ujson.Arr.from(stderr)))</code></li>
+<li id='L35'><code>      case NoOutput =&gt; ujson.write(ujson.Obj("success" -&gt; true, "stdout" -&gt; ujson.Arr(), "stderr" -&gt; ujson.Arr()))</code></li>
+<li id='L36'><code></code></li>
+<li id='L37'><code>  private class StreamCapture:</code></li>
+<li id='L38'><code>    private val bytes = new ByteArrayOutputStream()</code></li>
+<li id='L39'><code>    val stream = new PrintStream(bytes, true, UTF_8)</code></li>
+<li id='L40'><code>    def content: String =</code></li>
+<li id='L41'><code>      stream.flush()</code></li>
+<li id='L42'><code>      bytes.toString(UTF_8)</code></li>
+<li id='L43'><code></code></li>
+<li id='L44'><code>  private object lock</code></li>
+<li id='L45'><code>  private object compileLock</code></li>
+<li id='L46'><code>  private final class ActiveReplExecution(val thread: Thread):</code></li>
+<li id='L47'><code>    private val classLoaders = ConcurrentLinkedQueue[ClassLoader]()</code></li>
+<li id='L48'><code></code></li>
+<li id='L49'><code>    def addClassLoader(classLoader: ClassLoader): Unit =</code></li>
+<li id='L50'><code>      if !classLoaders.contains(classLoader) then classLoaders.add(classLoader)</code></li>
+<li id='L51'><code></code></li>
+<li id='L52'><code>    def foreachClassLoader(op: ClassLoader =&gt; Unit): Unit =</code></li>
+<li id='L53'><code>      val iterator = classLoaders.iterator()</code></li>
+<li id='L54'><code>      while iterator.hasNext do op(iterator.next())</code></li>
+<li id='L55'><code></code></li>
+<li id='L56'><code>  private final case class TrackedReplExecution(</code></li>
+<li id='L57'><code>      execution: ActiveReplExecution,</code></li>
+<li id='L58'><code>      closeable: AutoCloseable</code></li>
+<li id='L59'><code>  ) extends AutoCloseable:</code></li>
+<li id='L60'><code>    def close(): Unit = closeable.close()</code></li>
+<li id='L61'><code></code></li>
+<li id='L62'><code>  private object ScalaClassLoader</code></li>
+<li id='L63'><code>      extends java.net.URLClassLoader(</code></li>
+<li id='L64'><code>        {</code></li>
+<li id='L65'><code>          sys</code></li>
+<li id='L66'><code>            .props("java.class.path")</code></li>
+<li id='L67'><code>            .split(java.io.File.pathSeparator)</code></li>
+<li id='L68'><code>            .filter(p =&gt; p.contains("/org/scala-lang/scala-library/"))</code></li>
+<li id='L69'><code>            .map(path =&gt; Paths.get(path).toUri.toURL)</code></li>
+<li id='L70'><code>        },</code></li>
+<li id='L71'><code>        ClassLoader.getSystemClassLoader.getParent</code></li>
+<li id='L72'><code>      )</code></li>
+<li id='L73'><code></code></li>
+<li id='L74'><code>  /** For now - no plans to cross-universe classpaths */</code></li>
+<li id='L75'><code>  private class Session(ps: PrintStream)</code></li>
+<li id='L76'><code>      extends ReplDriver(</code></li>
+<li id='L77'><code>        settings = Array(</code></li>
+<li id='L78'><code>          "-classpath",</code></li>
+<li id='L79'><code>          ScalaClassLoader.getURLs.map(_.toURI().getPath()).mkString(":"),</code></li>
+<li id='L80'><code>          "-language:experimental.captureChecking",</code></li>
+<li id='L81'><code>          "-Xrepl-interrupt-instrumentation:true",</code></li>
+<li id='L82'><code>          "-color:never"</code></li>
+<li id='L83'><code>        ),</code></li>
+<li id='L84'><code>        out = ps,</code></li>
+<li id='L85'><code>        classLoader = Some(ScalaClassLoader),</code></li>
+<li id='L86'><code>        extraPredef = ""</code></li>
+<li id='L87'><code>      ) {</code></li>
+<li id='L88'><code></code></li>
+<li id='L89'><code>    // Diagnostics already use the driver's `out`; tool streams are passed explicitly.</code></li>
+<li id='L90'><code>    override protected def redirectOutput: Boolean = false</code></li>
+<li id='L91'><code></code></li>
+<li id='L92'><code>    var state = initialState.copy(quiet = true)</code></li>
+<li id='L93'><code>    // initialState retains the driver's root context, used to start every new run.</code></li>
+<li id='L94'><code>    private var modeContext = state.context.asInstanceOf[FreshContext]</code></li>
+<li id='L95'><code>    private var lastRunFailed = false</code></li>
+<li id='L96'><code>    private val activeExecution = AtomicReference[ActiveReplExecution | Null](null)</code></li>
+<li id='L97'><code></code></li>
+<li id='L98'><code>    override protected def interpret(parsed: ParseResult)(using previous: State): State =</code></li>
+<li id='L99'><code>      val next = super.interpret(parsed)</code></li>
+<li id='L100'><code>      // Failed compilations drain the reporter and retain the previous context.</code></li>
+<li id='L101'><code>      // The returned state marks their wrapper invalid; syntax errors have no wrapper.</code></li>
+<li id='L102'><code>      lastRunFailed ||= parsed.isInstanceOf[SyntaxErrors] ||</code></li>
+<li id='L103'><code>        (next.invalidObjectIndexes -- previous.invalidObjectIndexes).nonEmpty</code></li>
+<li id='L104'><code>      next</code></li>
+<li id='L105'><code></code></li>
+<li id='L106'><code>    private def currentReplClassLoader(using state: State): ClassLoader =</code></li>
+<li id='L107'><code>      rendering.getClass</code></li>
+<li id='L108'><code>        .getMethods()</code></li>
+<li id='L109'><code>        .find(method =&gt; method.getName == "classLoader" &amp;&amp; method.getParameterCount == 1)</code></li>
+<li id='L110'><code>        .map(_.invoke(rendering, state.context).asInstanceOf[ClassLoader])</code></li>
+<li id='L111'><code>        .getOrElse(throw IllegalStateException("Could not access REPL class loader"))</code></li>
+<li id='L112'><code></code></li>
+<li id='L113'><code>    private def invokeEntryPoint(name: String, stdout: PrintStream, stderr: PrintStream): Boolean =</code></li>
+<li id='L114'><code>      given State = state</code></li>
+<li id='L115'><code>      val loader = currentReplClassLoader</code></li>
+<li id='L116'><code>      val wrapper = ReplCompiler.objectNames(state.objectIndex).encode.toString</code></li>
+<li id='L117'><code>      val entry = Class.forName(wrapper, true, loader)</code></li>
+<li id='L118'><code>        .getMethod(name, classOf[PrintStream], classOf[PrintStream])</code></li>
+<li id='L119'><code>      val thread = Thread.currentThread()</code></li>
+<li id='L120'><code>      val previousLoader = thread.getContextClassLoader</code></li>
+<li id='L121'><code>      try</code></li>
+<li id='L122'><code>        thread.setContextClassLoader(loader)</code></li>
+<li id='L123'><code>        entry.invoke(null, stdout, stderr).asInstanceOf[java.lang.Boolean].booleanValue()</code></li>
+<li id='L124'><code>      catch</code></li>
+<li id='L125'><code>        case error: java.lang.reflect.InvocationTargetException =&gt; throw error.getCause</code></li>
+<li id='L126'><code>      finally thread.setContextClassLoader(previousLoader)</code></li>
+<li id='L127'><code></code></li>
+<li id='L128'><code>    private def interruptExecution(execution: ActiveReplExecution): Unit =</code></li>
+<li id='L129'><code>      execution.foreachClassLoader { classLoader =&gt;</code></li>
+<li id='L130'><code>        setStopFlag(classLoader, b = true)</code></li>
+<li id='L131'><code>      }</code></li>
+<li id='L132'><code>      execution.thread.interrupt()</code></li>
+<li id='L133'><code></code></li>
+<li id='L134'><code>    def interruptActiveExecution(): Boolean =</code></li>
+<li id='L135'><code>      activeExecution.get() match</code></li>
+<li id='L136'><code>        case null      =&gt; false</code></li>
+<li id='L137'><code>        case execution =&gt;</code></li>
+<li id='L138'><code>          interruptExecution(execution)</code></li>
+<li id='L139'><code>          true</code></li>
+<li id='L140'><code></code></li>
+<li id='L141'><code>    private def trackExecution(cancellationToken: CancellationToken): TrackedReplExecution =</code></li>
+<li id='L142'><code>      given State = state</code></li>
+<li id='L143'><code>      val execution = ActiveReplExecution(Thread.currentThread())</code></li>
+<li id='L144'><code>      registerCurrentClassLoader(execution)</code></li>
+<li id='L145'><code>      activeExecution.set(execution)</code></li>
+<li id='L146'><code>      val cancellationRegistration = cancellationToken.onCancel {</code></li>
+<li id='L147'><code>        interruptExecution(execution)</code></li>
+<li id='L148'><code>      }</code></li>
+<li id='L149'><code>      TrackedReplExecution(</code></li>
+<li id='L150'><code>        execution,</code></li>
+<li id='L151'><code>        new AutoCloseable:</code></li>
+<li id='L152'><code>          def close(): Unit =</code></li>
+<li id='L153'><code>            cancellationRegistration.close()</code></li>
+<li id='L154'><code>            val _ = activeExecution.compareAndSet(execution, null)</code></li>
+<li id='L155'><code>            execution.foreachClassLoader { classLoader =&gt;</code></li>
+<li id='L156'><code>              setStopFlag(classLoader, b = false)</code></li>
+<li id='L157'><code>            }</code></li>
+<li id='L158'><code>            if Thread.currentThread() == execution.thread then</code></li>
+<li id='L159'><code>              val _ = Thread.interrupted()</code></li>
+<li id='L160'><code>            ()</code></li>
+<li id='L161'><code>      )</code></li>
+<li id='L162'><code></code></li>
+<li id='L163'><code>    private def registerCurrentClassLoader(execution: ActiveReplExecution): Unit =</code></li>
+<li id='L164'><code>      given State = state</code></li>
+<li id='L165'><code>      val classLoader = currentReplClassLoader</code></li>
+<li id='L166'><code>      setStopFlag(classLoader, b = false)</code></li>
+<li id='L167'><code>      execution.addClassLoader(classLoader)</code></li>
+<li id='L168'><code></code></li>
+<li id='L169'><code>    def runWithState(code: String): Unit =</code></li>
+<li id='L170'><code>      given State = state</code></li>
+<li id='L171'><code>      lastRunFailed = false</code></li>
+<li id='L172'><code>      state = run(code)</code></li>
+<li id='L173'><code></code></li>
+<li id='L174'><code>    /** Only harness scaffolding is compiled in trusted mode; snippet bodies stay safe. */</code></li>
+<li id='L175'><code>    private def setSafeMode(enabled: Boolean): Unit =</code></li>
+<li id='L176'><code>      val language = if enabled then "experimental.safe" else "experimental.captureChecking"</code></li>
+<li id='L177'><code>      // :settings appends language features, so it cannot turn safe mode back off.</code></li>
+<li id='L178'><code>      val _ = modeContext.setSetting(modeContext.settings.language, Nil)</code></li>
+<li id='L179'><code>      runWithState(s":settings -language:$language")</code></li>
+<li id='L180'><code>      modeContext = state.context.asInstanceOf[FreshContext]</code></li>
+<li id='L181'><code>      ReplOutputStream.clearBuffer()</code></li>
+<li id='L182'><code></code></li>
+<li id='L183'><code>    def renderMessage(message: Diagnostic): String =</code></li>
+<li id='L184'><code>      val msg = embedString(message.msg.toString)</code></li>
+<li id='L185'><code>      s"""- at ${message.pos.line + 1}:${message.pos.column + 1}: $msg</code></li>
+<li id='L186'><code>        |""".stripMargin</code></li>
+<li id='L187'><code></code></li>
+<li id='L188'><code>    def step(command: String, label: String): Result[String, String] = result {</code></li>
+<li id='L189'><code>      val execResult = Result.catchException({ case e =&gt;</code></li>
+<li id='L190'><code>        s"""${embedString(label)}</code></li>
+<li id='L191'><code>          |</code></li>
+<li id='L192'><code>          |Errors summarized:</code></li>
+<li id='L193'><code>          |$e</code></li>
+<li id='L194'><code>          |${embedString(state.context.reporter.allErrors.map(renderMessage).mkString("\n"))}</code></li>
+<li id='L195'><code>          |""".stripMargin</code></li>
+<li id='L196'><code>      })({ runWithState(command) })</code></li>
+<li id='L197'><code>      execResult.check</code></li>
+<li id='L198'><code>      val output = ReplOutputStream.flushBuffer()</code></li>
+<li id='L199'><code>      if lastRunFailed || state.context.reporter.hasErrors then raise(s"""${embedString(label)}</code></li>
+<li id='L200'><code>          |</code></li>
+<li id='L201'><code>          |REPL output:</code></li>
+<li id='L202'><code>          |```scala</code></li>
+<li id='L203'><code>          |${embedString(output)}</code></li>
+<li id='L204'><code>          |```</code></li>
+<li id='L205'><code>          |""".stripMargin)</code></li>
+<li id='L206'><code>      else output</code></li>
+<li id='L207'><code>    }</code></li>
+<li id='L208'><code></code></li>
+<li id='L209'><code>    def embedString(str: String) = str.linesIterator.mkString("\n|")</code></li>
+<li id='L210'><code></code></li>
+<li id='L211'><code>    def loadJar(jarRelPath: os.RelPath, skill: Skill): Result[Unit, String] = task {</code></li>
+<li id='L212'><code>      val jarPath = os.pwd / jarRelPath</code></li>
+<li id='L213'><code>      runWithState(s":jar $jarPath")</code></li>
+<li id='L214'><code>      val jarOutput = ReplOutputStream.flushBuffer()</code></li>
+<li id='L215'><code>      val cpError: PartialFunction[String, Unit] = {</code></li>
+<li id='L216'><code>        case s"""Cannot add "$_" to classpath."""        =&gt;</code></li>
+<li id='L217'><code>        case s"""The path '$_' cannot be loaded$_"""     =&gt;</code></li>
+<li id='L218'><code>        case s"""Failed to load '$_' to classpath: $_""" =&gt;</code></li>
+<li id='L219'><code>      }</code></li>
+<li id='L220'><code>      if jarOutput.linesIterator.collectFirst(cpError).isDefined then</code></li>
+<li id='L221'><code>        raise(</code></li>
+<li id='L222'><code>          s"""Failed to load implementation JAR for universe `${skill.universe}` at path: $jarRelPath</code></li>
+<li id='L223'><code>            |This is an issue with the Skill definition or with the agent's ability to write to the filesystem.</code></li>
+<li id='L224'><code>            |Please check that the skill is defined correctly and that the agent has permission to write to its working directory.</code></li>
+<li id='L225'><code>            |REPL output:</code></li>
+<li id='L226'><code>            |```scala</code></li>
+<li id='L227'><code>            |${embedString(jarOutput.replaceAllLiterally(jarPath.toString, jarRelPath.toString))}</code></li>
+<li id='L228'><code>            |```</code></li>
+<li id='L229'><code>            |""".stripMargin</code></li>
+<li id='L230'><code>        )</code></li>
+<li id='L231'><code>    }</code></li>
+<li id='L232'><code></code></li>
+<li id='L233'><code>    def loadPredef(skill: Skill): Result[Unit, String] = task {</code></li>
+<li id='L234'><code>      skill.predef match</code></li>
+<li id='L235'><code>        case Some(predef) =&gt;</code></li>
+<li id='L236'><code>          val _ = step(</code></li>
+<li id='L237'><code>            predef,</code></li>
+<li id='L238'><code>            s"""Could not execute scaffolding code for universe `${skill.universe}`, given by the code:</code></li>
+<li id='L239'><code>              |```scala</code></li>
+<li id='L240'><code>              |${embedString(predef)}</code></li>
+<li id='L241'><code>              |```</code></li>
+<li id='L242'><code>              |This is an issue with the Skill definition. Please tell the maintainers of the skill to fix the issue.</code></li>
+<li id='L243'><code>              |""".stripMargin</code></li>
+<li id='L244'><code>          ).ok</code></li>
+<li id='L245'><code>        case _ =&gt; ()</code></li>
+<li id='L246'><code>    }</code></li>
+<li id='L247'><code></code></li>
+<li id='L248'><code>    def loadSkill(skill: Skill): Result[Unit, String] = task {</code></li>
+<li id='L249'><code>      if !skill.requiresRuntimeClasspath then ()</code></li>
+<li id='L250'><code>      else {</code></li>
+<li id='L251'><code>        val sigsRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "sigs.jar"</code></li>
+<li id='L252'><code>        val implRelPath = os.rel / ".agent-runtime" / "interface" / skill.universe / "impl.jar"</code></li>
+<li id='L253'><code>        loadJar(sigsRelPath, skill).check</code></li>
+<li id='L254'><code>        loadJar(implRelPath, skill).check</code></li>
+<li id='L255'><code>        loadPredef(skill).check</code></li>
+<li id='L256'><code>      }</code></li>
+<li id='L257'><code>    }</code></li>
+<li id='L258'><code></code></li>
+<li id='L259'><code>    def runExpression(</code></li>
+<li id='L260'><code>        builtins: Skill,</code></li>
+<li id='L261'><code>        skills: Seq[Skill],</code></li>
+<li id='L262'><code>        apiSkills: Seq[Skill],</code></li>
+<li id='L263'><code>        scalaCode: String,</code></li>
+<li id='L264'><code>        cancellationToken: CancellationToken</code></li>
+<li id='L265'><code>    ): Result[CodeOutput, String] =</code></li>
+<li id='L266'><code>      if cancellationToken.isCancelled then Result.Err("cancelled")</code></li>
+<li id='L267'><code>      else</code></li>
+<li id='L268'><code>        stateless {</code></li>
+<li id='L269'><code>          val uuid = java.util.UUID.randomUUID().toString.replaceAll("-", "_")</code></li>
+<li id='L270'><code>          val methodName = s"agentCode_$uuid"</code></li>
+<li id='L271'><code>          val entryName = s"harnessEntry_$uuid"</code></li>
+<li id='L272'><code>          val stdout = new StreamCapture</code></li>
+<li id='L273'><code>          val stderr = new StreamCapture</code></li>
+<li id='L274'><code>          val trackedExecution = trackExecution(cancellationToken)</code></li>
+<li id='L275'><code>          try</code></li>
+<li id='L276'><code>            result {</code></li>
+<li id='L277'><code>              loadSkill(builtins).check</code></li>
+<li id='L278'><code>              apiSkills.foreach(selected =&gt;</code></li>
+<li id='L279'><code>                loadJar(os.rel / ".agent-runtime/interface" / selected.universe / "sigs.jar", selected).check)</code></li>
+<li id='L280'><code>              skills.foreach { selected =&gt;</code></li>
+<li id='L281'><code>                loadJar(os.rel / ".agent-runtime/interface" / selected.universe / "impl.jar", selected).check</code></li>
+<li id='L282'><code>                loadPredef(selected).check</code></li>
+<li id='L283'><code>              }</code></li>
+<li id='L284'><code>              val bindings = SkillScaffold.bindings(builtins, skills)</code></li>
+<li id='L285'><code>              registerCurrentClassLoader(trackedExecution.execution)</code></li>
+<li id='L286'><code>              if cancellationToken.isCancelled then raise("cancelled")</code></li>
+<li id='L287'><code>              setSafeMode(enabled = true)</code></li>
+<li id='L288'><code>              val _ = step(</code></li>
+<li id='L289'><code>                SkillScaffold.definition(methodName, bindings, scalaCode),</code></li>
+<li id='L290'><code>                s"while compiling code for skills `${skills.map(_.universe).mkString(",")}`."</code></li>
+<li id='L291'><code>              ).ok</code></li>
+<li id='L292'><code>              if cancellationToken.isCancelled then raise("cancelled")</code></li>
+<li id='L293'><code>              setSafeMode(enabled = false)</code></li>
+<li id='L294'><code>              val _ = step(</code></li>
+<li id='L295'><code>                SkillScaffold.entryPoint(entryName, methodName, bindings),</code></li>
+<li id='L296'><code>                s"while compiling trusted wiring for skills `${skills.map(_.universe).mkString(",")}`."</code></li>
+<li id='L297'><code>              ).ok</code></li>
+<li id='L298'><code>              registerCurrentClassLoader(trackedExecution.execution)</code></li>
+<li id='L299'><code>              val succeeded = invokeEntryPoint(entryName, stdout.stream, stderr.stream)</code></li>
+<li id='L300'><code>              if cancellationToken.isCancelled then raise("cancelled")</code></li>
+<li id='L301'><code>              CodeOutput(stdout.content, stderr.content, failed = !succeeded)</code></li>
+<li id='L302'><code>            }</code></li>
+<li id='L303'><code>          finally</code></li>
+<li id='L304'><code>            trackedExecution.close()</code></li>
+<li id='L305'><code>            stdout.stream.close()</code></li>
+<li id='L306'><code>            stderr.stream.close()</code></li>
+<li id='L307'><code>        }</code></li>
+<li id='L308'><code></code></li>
+<li id='L309'><code>    def stateless[T](op: =&gt; T): T = lock.synchronized {</code></li>
+<li id='L310'><code>      try op</code></li>
+<li id='L311'><code>      finally</code></li>
+<li id='L312'><code>        resetToInitial()</code></li>
+<li id='L313'><code>        state = initialState.copy(quiet = true)</code></li>
+<li id='L314'><code>        modeContext = state.context.asInstanceOf[FreshContext]</code></li>
+<li id='L315'><code>        ReplOutputStream.clearBuffer()</code></li>
+<li id='L316'><code>    }</code></li>
+<li id='L317'><code>  }</code></li>
+<li id='L318'><code></code></li>
+<li id='L319'><code>  private object ReplOutputStream extends java.io.OutputStream {</code></li>
+<li id='L320'><code>    private val buffer = new StringBuilder</code></li>
+<li id='L321'><code></code></li>
+<li id='L322'><code>    def flushBuffer(): String =</code></li>
+<li id='L323'><code>      lock.synchronized {</code></li>
+<li id='L324'><code>        val content = buffer.toString()</code></li>
+<li id='L325'><code>        buffer.clear()</code></li>
+<li id='L326'><code>        content</code></li>
+<li id='L327'><code>      }</code></li>
+<li id='L328'><code></code></li>
+<li id='L329'><code>    def clearBuffer(): Unit =</code></li>
+<li id='L330'><code>      lock.synchronized {</code></li>
+<li id='L331'><code>        buffer.clear()</code></li>
+<li id='L332'><code>      }</code></li>
+<li id='L333'><code></code></li>
+<li id='L334'><code>    override def write(b: Int): Unit =</code></li>
+<li id='L335'><code>      lock.synchronized {</code></li>
+<li id='L336'><code>        buffer.append(b.toChar)</code></li>
+<li id='L337'><code>      }</code></li>
+<li id='L338'><code>  }</code></li>
+<li id='L339'><code></code></li>
+<li id='L340'><code>  private val globalSession = new Session(new PrintStream(ReplOutputStream))</code></li>
+<li id='L341'><code></code></li>
+<li id='L342'><code>  def interruptActiveExecution(): Boolean =</code></li>
+<li id='L343'><code>    globalSession.interruptActiveExecution()</code></li>
+<li id='L344'><code></code></li>
+<li id='L345'><code>  def runCode(</code></li>
+<li id='L346'><code>      builtins: Skill,</code></li>
+<li id='L347'><code>      skill: Skill,</code></li>
+<li id='L348'><code>      scalaCode: String,</code></li>
+<li id='L349'><code>      cancellationToken: CancellationToken = CancellationToken.Never</code></li>
+<li id='L350'><code>  ): Result[CodeOutput, String] = runCode(builtins, Seq(skill), scalaCode, cancellationToken)</code></li>
+<li id='L351'><code></code></li>
+<li id='L352'><code>  def runCode(</code></li>
+<li id='L353'><code>      builtins: Skill,</code></li>
+<li id='L354'><code>      selected: Seq[Skill],</code></li>
+<li id='L355'><code>      scalaCode: String,</code></li>
+<li id='L356'><code>      cancellationToken: CancellationToken</code></li>
+<li id='L357'><code>  ): Result[CodeOutput, String] = lock.synchronized {</code></li>
+<li id='L358'><code>    try</code></li>
+<li id='L359'><code>      prepareSkills(builtins, selected).flatMap { skills =&gt;</code></li>
+<li id='L360'><code>        val available = selected ++ Skills.loadAll(os.pwd / "skills") :+ Skills.Basic</code></li>
+<li id='L361'><code>        Skills.resolve(selected.map(_.universe), available, builtins, includeApis = true).flatMap { apis =&gt;</code></li>
+<li id='L362'><code>          globalSession.runExpression(builtins, skills, apis, scalaCode, cancellationToken)</code></li>
+<li id='L363'><code>        }</code></li>
+<li id='L364'><code>      }</code></li>
+<li id='L365'><code>    catch</code></li>
+<li id='L366'><code>      case scala.util.control.NonFatal(error) =&gt; Result.Err(error.toString)</code></li>
+<li id='L367'><code>    finally ReplOutputStream.clearBuffer()</code></li>
+<li id='L368'><code>  }</code></li>
+<li id='L369'><code></code></li>
+<li id='L370'><code>  /** Prepare APIs/implementations without invoking capability factories or contacting a provider. */</code></li>
+<li id='L371'><code>  def prepareSkills(builtins: Skill, selected: Seq[Skill]): Result[Vector[Skill], String] =</code></li>
+<li id='L372'><code>    Result.catchException { case error =&gt; error.toString } {</code></li>
+<li id='L373'><code>      val available = selected ++ Skills.loadAll(os.pwd / "skills") :+ Skills.Basic</code></li>
+<li id='L374'><code>      Skills.resolve(selected.map(_.universe), available, builtins).map { skills =&gt;</code></li>
+<li id='L375'><code>        compileLock.synchronized {</code></li>
+<li id='L376'><code>          ensureCompiled(builtins)</code></li>
+<li id='L377'><code>          val compileOrder = Skills.resolve(selected.map(_.universe), available, builtins, includeApis = true) match</code></li>
+<li id='L378'><code>            case Result.Ok(value) =&gt; value</code></li>
+<li id='L379'><code>            case Result.Err(error) =&gt; throw IllegalArgumentException(error)</code></li>
+<li id='L380'><code>          for skill &lt;- compileOrder do</code></li>
+<li id='L381'><code>            val localApis = skill.apiDependencies.filter(name =&gt; available.exists(_.universe == name))</code></li>
+<li id='L382'><code>            val dependencyApis = Skills.resolve(skill.requires ++ localApis, available, builtins, includeApis = true) match</code></li>
+<li id='L383'><code>              case Result.Ok(value) =&gt; value</code></li>
+<li id='L384'><code>              case Result.Err(error) =&gt; throw IllegalArgumentException(error)</code></li>
+<li id='L385'><code>            val _ = compileSkill(skill, dependencyApis)</code></li>
+<li id='L386'><code>        }</code></li>
+<li id='L387'><code>        skills</code></li>
+<li id='L388'><code>      }</code></li>
+<li id='L389'><code>    }.flatMap(identity)</code></li>
+<li id='L390'><code></code></li>
+<li id='L391'><code>  /** Decode each channel independently; stderr output alone does not mean execution failed. */</code></li>
+<li id='L392'><code>  def decodeOutput(output: CodeOutput): ScalaToolResult =</code></li>
+<li id='L393'><code>    def decodeChannel(name: String, text: String): Vector[ujson.Value] =</code></li>
+<li id='L394'><code>      text.linesIterator.filter(_.trim.nonEmpty).map { line =&gt;</code></li>
+<li id='L395'><code>        try</code></li>
+<li id='L396'><code>          val data = ujson.read(line)</code></li>
+<li id='L397'><code>          data.obj.get("special.success").orElse(data.obj.get("special.error")).getOrElse(data)</code></li>
+<li id='L398'><code>        catch</code></li>
+<li id='L399'><code>          case scala.util.control.NonFatal(error) =&gt;</code></li>
+<li id='L400'><code>            throw IllegalArgumentException(s"Failed to parse structured $name output: $line. Error: ${error.getMessage}")</code></li>
+<li id='L401'><code>      }.toVector</code></li>
+<li id='L402'><code>    try</code></li>
+<li id='L403'><code>      val stdout = decodeChannel("stdout", output.stdout)</code></li>
+<li id='L404'><code>      val stderr = decodeChannel("stderr", output.stderr)</code></li>
+<li id='L405'><code>      if output.failed then</code></li>
+<li id='L406'><code>        ScalaToolResult.Failure(stderr.lastOption.getOrElse(ujson.Str("Execution failed")), stdout, stderr)</code></li>
+<li id='L407'><code>      else if stdout.isEmpty &amp;&amp; stderr.isEmpty then ScalaToolResult.NoOutput</code></li>
+<li id='L408'><code>      else ScalaToolResult.Success(stdout, stderr)</code></li>
+<li id='L409'><code>    catch</code></li>
+<li id='L410'><code>      case scala.util.control.NonFatal(error) =&gt; ScalaToolResult.Failure(error.getMessage)</code></li>
+<li id='L411'><code></code></li>
+<li id='L412'><code>  def ensureCompiled(skill: Skill): Unit =</code></li>
+<li id='L413'><code>    if skill.requiresRuntimeClasspath then</code></li>
+<li id='L414'><code>      compileLock.synchronized {</code></li>
+<li id='L415'><code>        val _ = compileSkill(skill)</code></li>
+<li id='L416'><code>        ()</code></li>
+<li id='L417'><code>      }</code></li>
+<li id='L418'><code></code></li>
+<li id='L419'><code>  def runCodeHarness(</code></li>
+<li id='L420'><code>      builtins: Skill,</code></li>
+<li id='L421'><code>      skill: Skill,</code></li>
+<li id='L422'><code>      scalaCode: String,</code></li>
+<li id='L423'><code>      callId: Int,</code></li>
+<li id='L424'><code>      log: Logger,</code></li>
+<li id='L425'><code>      cancellationToken: CancellationToken = CancellationToken.Never</code></li>
+<li id='L426'><code>  )(using ExecutionContext): Future[ScalaToolResult] =</code></li>
+<li id='L427'><code>    runCodeHarness(builtins, Seq(skill), scalaCode, callId, log, cancellationToken)</code></li>
+<li id='L428'><code></code></li>
+<li id='L429'><code>  def runCodeHarness(</code></li>
+<li id='L430'><code>      builtins: Skill,</code></li>
+<li id='L431'><code>      skills: Seq[Skill],</code></li>
+<li id='L432'><code>      scalaCode: String,</code></li>
+<li id='L433'><code>      callId: Int,</code></li>
+<li id='L434'><code>      log: Logger,</code></li>
+<li id='L435'><code>      cancellationToken: CancellationToken</code></li>
+<li id='L436'><code>  )(using ExecutionContext): Future[ScalaToolResult] =</code></li>
+<li id='L437'><code>    def strippedAnsi(str: String): String =</code></li>
+<li id='L438'><code>      str.replaceAll("\u001B\\[[;\\d]*m", "")</code></li>
+<li id='L439'><code>    Future[Result[CodeOutput, String]] {</code></li>
+<li id='L440'><code>      scala.concurrent.blocking {</code></li>
+<li id='L441'><code>        if cancellationToken.isCancelled then Result.Err("cancelled")</code></li>
+<li id='L442'><code>        else</code></li>
+<li id='L443'><code>          val monitor =</code></li>
+<li id='L444'><code>            RuntimeStatus.monitor(</code></li>
+<li id='L445'><code>              log,</code></li>
+<li id='L446'><code>              s"running tool #$callId",</code></li>
+<li id='L447'><code>              shouldUpdate = () =&gt; !cancellationToken.isCancelled</code></li>
+<li id='L448'><code>            )</code></li>
+<li id='L449'><code>          try runCode(builtins, skills, scalaCode, cancellationToken)</code></li>
+<li id='L450'><code>          finally monitor.close()</code></li>
+<li id='L451'><code>      }</code></li>
+<li id='L452'><code>    }.transform({ try0 =&gt;</code></li>
+<li id='L453'><code>      val normalized = try0 match</code></li>
+<li id='L454'><code>        case scala.util.Success(res) =&gt;</code></li>
+<li id='L455'><code>          res match</code></li>
+<li id='L456'><code>            case Result.Ok(value) =&gt;</code></li>
+<li id='L457'><code>              decodeOutput(value)</code></li>
+<li id='L458'><code>            case Result.Err(error) =&gt;</code></li>
+<li id='L459'><code>              ScalaToolResult.Failure(strippedAnsi(error))</code></li>
+<li id='L460'><code>        case scala.util.Failure(exception) =&gt;</code></li>
+<li id='L461'><code>          ScalaToolResult.Failure(</code></li>
+<li id='L462'><code>            s"Exception while executing code: ${strippedAnsi(exception.getMessage)}"</code></li>
+<li id='L463'><code>          )</code></li>
+<li id='L464'><code>      locally {</code></li>
+<li id='L465'><code>        normalized.match</code></li>
+<li id='L466'><code>          case ScalaToolResult.NoOutput =&gt; ()</code></li>
+<li id='L467'><code>          case ScalaToolResult.Success(stdout, stderr) =&gt;</code></li>
+<li id='L468'><code>            logOutputs(stdout, stderr, callId, log)</code></li>
+<li id='L469'><code>          case ScalaToolResult.Failure(ujson.Str("cancelled"), _, _) =&gt;</code></li>
+<li id='L470'><code>            ()</code></li>
+<li id='L471'><code>          case ScalaToolResult.Failure(error, stdout, stderr) =&gt;</code></li>
+<li id='L472'><code>            logOutputs(stdout, stderr, callId, log)</code></li>
+<li id='L473'><code>            log.print(</code></li>
+<li id='L474'><code>              s"${Console.RED}Error executing code chunk [$callId]:\n---\n${error.render(indent = 2)}${Console.RESET}\n"</code></li>
+<li id='L475'><code>            )</code></li>
+<li id='L476'><code>      }</code></li>
+<li id='L477'><code>      scala.util.Success(normalized)</code></li>
+<li id='L478'><code>    })</code></li>
+<li id='L479'><code></code></li>
+<li id='L480'><code>  private def logOutputs(stdout: Vector[ujson.Value], stderr: Vector[ujson.Value], callId: Int, log: Logger): Unit =</code></li>
+<li id='L481'><code>    for (channel, values, color) &lt;- Seq(("stdout", stdout, Console.GREEN), ("stderr", stderr, Console.RED)) do</code></li>
+<li id='L482'><code>      if values.nonEmpty then</code></li>
+<li id='L483'><code>        log.print(s"${color}$channel for code chunk [$callId]:\n${values.map(_.render()).mkString("\n")}${Console.RESET}\n")</code></li>
+<li id='L484'><code></code></li>
+<li id='L485'><code>  def compileSkill(skill: Skill, dependencies: Seq[Skill] = Nil): os.Path = {</code></li>
+<li id='L486'><code>    val dependencyJars = dependencies.map(d =&gt; os.pwd / ".agent-runtime/interface" / d.universe / "sigs.jar")</code></li>
+<li id='L487'><code>    val dependencyFlags = dependencyJars.flatMap(path =&gt; Seq("--extra-jar", path.toString))</code></li>
+<li id='L488'><code>    def digestFrom(strings: String*): String = {</code></li>
+<li id='L489'><code>      val hasher = java.security.MessageDigest.getInstance("SHA-256")</code></li>
+<li id='L490'><code>      for sourceCode &lt;- strings.filter(_.nonEmpty).map(_.getBytes()) do hasher.update(sourceCode)</code></li>
+<li id='L491'><code>      val digest = hasher.digest()</code></li>
+<li id='L492'><code>      val base64 = java.util.Base64.getEncoder.encodeToString(digest)</code></li>
+<li id='L493'><code>      base64</code></li>
+<li id='L494'><code>    }</code></li>
+<li id='L495'><code>    def withTempFile[T](prefix: os.Path, name: String)(f: os.Path =&gt; T): T = {</code></li>
+<li id='L496'><code>      val tempFile = prefix / name</code></li>
+<li id='L497'><code>      try f(tempFile)</code></li>
+<li id='L498'><code>      finally os.remove(tempFile)</code></li>
+<li id='L499'><code>    }</code></li>
+<li id='L500'><code>    val outdir = os.pwd / ".agent-runtime" / "interface" / skill.name</code></li>
+<li id='L501'><code>    os.makeDir.all(outdir)</code></li>
+<li id='L502'><code>    val targetSigJar = outdir / "sigs.jar"</code></li>
+<li id='L503'><code>    val targetImplJar = outdir / "impl.jar"</code></li>
+<li id='L504'><code>    val existingSigs = scala.util.Try(os.read(outdir / "sigs.hash"))</code></li>
+<li id='L505'><code>    val digest =</code></li>
+<li id='L506'><code>      digestFrom("safe-api-publish-v1", ScalaVersion, skill.interface, skill.code, skill.api, skill.predef.getOrElse(""), skill.bindings.toString, skill.requires.toString,</code></li>
+<li id='L507'><code>        dependencyJars.map(path =&gt; java.util.Base64.getEncoder.encodeToString(os.read.bytes(path))).mkString("|"))</code></li>
+<li id='L508'><code>    val shouldWrite = !os.exists(targetSigJar) || !os</code></li>
+<li id='L509'><code>      .exists(targetImplJar) || existingSigs.map(_ != digest).getOrElse(true)</code></li>
+<li id='L510'><code>    if (shouldWrite) {</code></li>
+<li id='L511'><code>      // A failed rebuild must not leave a cache marker for partially replaced JARs.</code></li>
+<li id='L512'><code>      if os.exists(outdir / "sigs.hash") then os.remove(outdir / "sigs.hash")</code></li>
+<li id='L513'><code>      val tempDir = os.pwd / ".agent-runtime" / "temp" / skill.name</code></li>
+<li id='L514'><code>      try</code></li>
+<li id='L515'><code>        os.makeDir.all(tempDir)</code></li>
+<li id='L516'><code>        withTempFile(tempDir, "Interface.scala") { tempInterface =&gt;</code></li>
+<li id='L517'><code>          val intfdirectives = skill.interface.linesIterator.toVector.takeWhile(line =&gt;</code></li>
+<li id='L518'><code>            line.startsWith("//&gt; using ") || line.trim.isEmpty()</code></li>
+<li id='L519'><code>          )</code></li>
+<li id='L520'><code>          os.write.over(tempInterface, skill.interface)</code></li>
+<li id='L521'><code>          withTempFile(tempDir, "sigs.jar") { sigsJar =&gt;</code></li>
+<li id='L522'><code>            val _ = os.call(</code></li>
+<li id='L523'><code>              cmd = Seq(</code></li>
+<li id='L524'><code>                "scala",</code></li>
+<li id='L525'><code>                "--power",</code></li>
+<li id='L526'><code>                "package",</code></li>
+<li id='L527'><code>                "-S",</code></li>
+<li id='L528'><code>                ScalaVersion,</code></li>
+<li id='L529'><code>                "--library",</code></li>
+<li id='L530'><code>                "-f",</code></li>
+<li id='L531'><code>                "-o",</code></li>
+<li id='L532'><code>                sigsJar.toString,</code></li>
+<li id='L533'><code>                "-language:experimental.safe",</code></li>
+<li id='L534'><code>                tempInterface.toString</code></li>
+<li id='L535'><code>              ) ++ dependencyFlags</code></li>
+<li id='L536'><code>            )</code></li>
+<li id='L537'><code>            os.copy(sigsJar, targetSigJar, replaceExisting = true)</code></li>
+<li id='L538'><code>            SkillArtifacts.publish(skill, tempInterface)</code></li>
+<li id='L539'><code>            withTempFile(tempDir, "Implementation.scala") { tempCode =&gt;</code></li>
+<li id='L540'><code>              val (directives, file) = skill.code.linesIterator.toVector.span(line =&gt;</code></li>
+<li id='L541'><code>                line.startsWith("//&gt; using ") || line.trim.isEmpty()</code></li>
+<li id='L542'><code>              )</code></li>
+<li id='L543'><code>              val directives0 = (intfdirectives ++ directives)</code></li>
+<li id='L544'><code>                .filterNot(line =&gt;</code></li>
+<li id='L545'><code>                  line.startsWith("//&gt; using file ") || line.startsWith("//&gt; using files ")</code></li>
+<li id='L546'><code>                )</code></li>
+<li id='L547'><code>              val code0 = (directives0 ++ file).mkString(java.lang.System.lineSeparator())</code></li>
+<li id='L548'><code>              os.write.over(tempCode, code0)</code></li>
+<li id='L549'><code>              withTempFile(tempDir, "impl.jar") { implJar =&gt;</code></li>
+<li id='L550'><code>                val _ = os.call(</code></li>
+<li id='L551'><code>                  cmd = Seq(</code></li>
+<li id='L552'><code>                    "scala",</code></li>
+<li id='L553'><code>                    "--power",</code></li>
+<li id='L554'><code>                    "package",</code></li>
+<li id='L555'><code>                    "-S",</code></li>
+<li id='L556'><code>                    ScalaVersion,</code></li>
+<li id='L557'><code>                    "--library",</code></li>
+<li id='L558'><code>                    "-f",</code></li>
+<li id='L559'><code>                    "-o",</code></li>
+<li id='L560'><code>                    implJar.toString,</code></li>
+<li id='L561'><code>                    "--extra-jar",</code></li>
+<li id='L562'><code>                    sigsJar.toString,</code></li>
+<li id='L563'><code>                    tempCode.toString</code></li>
+<li id='L564'><code>                  ) ++ dependencyFlags</code></li>
+<li id='L565'><code>                )</code></li>
+<li id='L566'><code>                os.copy(implJar, targetImplJar, replaceExisting = true)</code></li>
+<li id='L567'><code>              }</code></li>
+<li id='L568'><code>            }</code></li>
+<li id='L569'><code>          }</code></li>
+<li id='L570'><code>        }</code></li>
+<li id='L571'><code>        os.write.over(outdir / "sigs.hash", digest)</code></li>
+<li id='L572'><code>      finally os.remove.all(tempDir)</code></li>
+<li id='L573'><code>    }</code></li>
+<li id='L574'><code>    outdir</code></li>
+<li id='L575'><code>  }</code></li>
+<li id='L576'><code>}</code></li></ol></html>

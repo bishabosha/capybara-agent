@@ -8,6 +8,7 @@ import org.virtuslab.yaml.*
 
 type SkillBinding = (name: String, tpe: String, value: String)
 type SkillManifest = (universe: String, api: String, predef: Option[String], bindings: Seq[SkillBinding])
+type ComposedSkillManifest = (universe: String, api: String, predef: Option[String], bindings: Seq[SkillBinding], requires: Option[Seq[String]])
 
 case class Skill(
     name: String,
@@ -18,7 +19,9 @@ case class Skill(
     api: String,
     predef: Option[String],
     requiresRuntimeClasspath: Boolean = true,
-    bindings: Seq[SkillBinding] = Nil
+    bindings: Seq[SkillBinding] = Nil,
+    requires: Seq[String] = Nil,
+    apiDependencies: Seq[String] = Nil
 )
 
 case class SkillMd(
@@ -76,7 +79,15 @@ object Skills {
     val manifestFile = dir / "scripts/Manifest.scala"
 
     val skill = parseSkill(readSafely(skillMd).ok).ok
-    val manifest = parseManifest(readSafely(manifestFile).ok).ok
+    val manifestText = readSafely(manifestFile).ok
+    val dependencyPattern = "(?s).*\\brequires\\s*=.*".r
+    val (manifest, dependencies) = manifestText match
+      case dependencyPattern() =>
+        val composed = Readers.readDeclAs[ComposedSkillManifest](manifestText, rootName = "Manifest")
+          .mapErr(e => s"manifest parse error: ${e.format}").ok
+        ((universe = composed.universe, api = composed.api, predef = composed.predef,
+          bindings = composed.bindings), composed.requires.getOrElse(Nil))
+      case _ => (parseManifest(manifestText).ok, Nil)
     val interfaceCode = readSafely(interfaceFile).ok
     val implCode = readSafely(implFile).ok
     Skill(
@@ -87,9 +98,37 @@ object Skills {
       code = implCode,
       api = manifest.api,
       predef = manifest.predef.filter(_.nonEmpty),
-      bindings = manifest.bindings
+      bindings = manifest.bindings,
+      requires = dependencies.distinct,
+      apiDependencies = SkillArtifacts.dependencies(interfaceCode, implCode)
     )
   }
+
+  /** Dependency order is also factory-construction order. Only declared safe APIs form compile classpaths. */
+  def resolve(requested: Seq[String], available: Seq[Skill], builtins: Skill,
+              includeApis: Boolean = false): Result[Vector[Skill], String] =
+    Result.catchException { case error => error.getMessage } {
+      val known = (available :+ builtins).groupBy(_.universe).view.mapValues(_.head).toMap
+      val completed = scala.collection.mutable.Set.empty[String]
+      val active = scala.collection.mutable.Set.empty[String]
+      val ordered = Vector.newBuilder[Skill]
+      def visit(name: String): Unit =
+        if !completed(name) then
+          require(!active(name), s"Skill dependency cycle at: $name")
+          val skill = known.getOrElse(name, throw IllegalArgumentException(s"Universe not found: $name"))
+          require(skill.name == skill.universe, s"Skill name must match universe: $name")
+          active += name
+          skill.requires.foreach(visit)
+          if includeApis then skill.apiDependencies.filter(known.contains).foreach(visit)
+          active -= name
+          completed += name
+          if skill.requiresRuntimeClasspath && name != builtins.universe then ordered += skill
+      requested.foreach(visit)
+      val skills = ordered.result()
+      if !includeApis then
+        val _ = SkillScaffold.bindings(builtins, skills)
+      skills
+    }
 
   def loadAll(dir: Path): Seq[Skill] =
     // Todo: errors are swallowed
@@ -107,6 +146,7 @@ object Skills {
           |```
           |Calling convention:
           |${skill.api}
+          |Required skills (loaded automatically): ${skill.requires.mkString(", ")}
           |The harness supplies these named contextual parameters to your function (do not create them yourself):
           |```scala
           |${skill.bindings.map(b => s"${b.name}: ${b.tpe}").mkString("(using ", ", ", ")")}

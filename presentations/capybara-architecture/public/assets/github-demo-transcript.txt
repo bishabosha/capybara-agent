@@ -1,0 +1,65 @@
+// Generated command transcript for skills 'github'.
+// The per-call UUID is normalized; all methods use the actual scaffold templates.
+// Initial ReplDriver language: experimental.captureChecking.
+// Cache packaging, if needed, happens before these REPL commands.
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/capybara-builtins/sigs.jar
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/capybara-builtins/impl.jar
+
+import system_impl.builtins; import builtins.given; import builtins.{puts, putsErr}
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/coding/sigs.jar
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/github/sigs.jar
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/coding/impl.jar
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/github/impl.jar
+
+// HOST: clear the language-feature setting before changing mode.
+
+:settings -language:experimental.safe
+
+def agentCode_00000000_0000_0000_0000_000000000001(using output: builtins.OutputStreams, coding: editing.TextFiles, github: githubskill.GitHub): Unit = {
+// Select universes ["coding", "github"]. This performs real writes with production wiring.
+puts(github.lookupIssue(1))
+val topic = github.createBranch("capybara/issue-1")
+coding.edit("src/word-count.mjs") { source =>
+  source.replace("return text.split(' ').length;",
+    """const clean = text.trim();
+  return clean === '' ? 0 : clean.split(/\s+/u).length;""")
+}
+puts(coding.read("src/word-count.mjs"))
+val pushed = github.commit(topic, "Handle empty input and mixed whitespace",
+  Seq("src/word-count.mjs"))
+puts(github.createPullRequest(pushed,
+  "Handle empty input and mixed whitespace", "Fixes #1"))
+puts(github.checks(pushed))
+
+()
+}
+
+
+// HOST: clear the language-feature setting again.
+
+:settings -language:experimental.captureChecking
+
+def harnessEntry_00000000_0000_0000_0000_000000000001(__harnessStdout: java.io.PrintStream, __harnessStderr: java.io.PrintStream): Boolean =
+{
+given __capybara_output: builtins.OutputStreams = builtins.outputStreams(__harnessStdout, __harnessStderr)
+given __capybara_coding: editing.TextFiles = editing.internal.impl()
+given __capybara_github: githubskill.GitHub = githubskill.internal.impl()
+try { agentCode_00000000_0000_0000_0000_000000000001(using __capybara_output, __capybara_coding, __capybara_github); true }
+catch {
+  case scala.util.control.NonFatal(error) =>
+    __capybara_output.printErr(builtins.baseReflectiveShowable(error))
+    false
+}
+}
+
+
+// HOST invocation, not a submitted REPL command:
+// invokeEntryPoint("harnessEntry_00000000_0000_0000_0000_000000000001", stdout.stream, stderr.stream)
+// This reflects the compiled entry method with two host-owned PrintStreams.
+// Finally: resetToInitial(), restore initialState, and clear diagnostics.

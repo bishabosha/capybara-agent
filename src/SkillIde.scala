@@ -32,10 +32,13 @@ object SkillIde:
             (builtinsDirectory / "scripts" / "Implementation.scala").toString
           )
         val selected = if directory == builtinsDirectory then Skills.Basic else skill
-        os.write.over(preview, SkillScaffold.preview(builtins, selected), createFolders = true)
+        val resolved = ReplExec.prepareSkills(builtins, Seq(selected)).ok
+        val dependencyJars = resolved.filterNot(_.universe == selected.universe).flatMap(s =>
+          Seq("--extra-jar", (os.pwd / ".agent-runtime/interface" / s.universe / "impl.jar").toString))
+        os.write.over(preview, SkillScaffold.preview(builtins, resolved), createFolders = true)
         val _ = os.call(
           cmd = Seq("scala", "setup-ide", directory.toString, preview.toString) ++ baseline ++
-            Seq("--workspace", directory.toString, "--scala", ReplExec.ScalaVersion, "--scalac-option=-preview"),
+            dependencyJars ++ Seq("--workspace", directory.toString, "--scala", ReplExec.ScalaVersion, "--scalac-option=-preview"),
           cwd = directory
         )
         directory

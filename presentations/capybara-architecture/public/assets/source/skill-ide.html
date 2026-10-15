@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>src/SkillIde.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>src/SkillIde.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import steps.result.Result</code></li>
+<li id='L4'><code>import steps.result.Result.eval.ok</code></li>
+<li id='L5'><code>import steps.result.Result.apply as result</code></li>
+<li id='L6'><code></code></li>
+<li id='L7'><code>/** Set up BSP directly from a skill's sources and Scala CLI directives. No build files. */</code></li>
+<li id='L8'><code>object SkillIde:</code></li>
+<li id='L9'><code>  @mainargs.main(doc = "Prepare an existing skill directory for Metals or IntelliJ using Scala CLI.")</code></li>
+<li id='L10'><code>  def main(@mainargs.arg(doc = "Skill directory") skill: String): Unit =</code></li>
+<li id='L11'><code>    prepare(skill) match</code></li>
+<li id='L12'><code>      case Result.Ok(directory) =&gt;</code></li>
+<li id='L13'><code>        println(s"Open $directory in Metals or import it as a BSP project in IntelliJ.")</code></li>
+<li id='L14'><code>        println(s"Capability wiring: ${directory / ".agent-runtime" / "SkillPreview.scala"}")</code></li>
+<li id='L15'><code>      case Result.Err(error) =&gt;</code></li>
+<li id='L16'><code>        scala.Console.err.println(error)</code></li>
+<li id='L17'><code>        sys.exit(1)</code></li>
+<li id='L18'><code></code></li>
+<li id='L19'><code>  def prepare(skillDirectory: String): Result[os.Path, String] =</code></li>
+<li id='L20'><code>    Result.catchException { case error =&gt; error.toString } {</code></li>
+<li id='L21'><code>      result {</code></li>
+<li id='L22'><code>        val directory = os.Path(skillDirectory, os.pwd)</code></li>
+<li id='L23'><code>        val skill = Skills.loadFrom(directory).ok</code></li>
+<li id='L24'><code>        val builtinsDirectory = os.pwd / "builtin-skills" / "capybara-builtins"</code></li>
+<li id='L25'><code>        val builtins = Skills.loadFrom(builtinsDirectory).ok</code></li>
+<li id='L26'><code>        val preview = directory / ".agent-runtime" / "SkillPreview.scala"</code></li>
+<li id='L27'><code>        // The builtin skill is already present when developing that skill itself.</code></li>
+<li id='L28'><code>        val baseline =</code></li>
+<li id='L29'><code>          if directory == builtinsDirectory then Nil</code></li>
+<li id='L30'><code>          else Seq(</code></li>
+<li id='L31'><code>            (builtinsDirectory / "scripts" / "Interface.scala").toString,</code></li>
+<li id='L32'><code>            (builtinsDirectory / "scripts" / "Implementation.scala").toString</code></li>
+<li id='L33'><code>          )</code></li>
+<li id='L34'><code>        val selected = if directory == builtinsDirectory then Skills.Basic else skill</code></li>
+<li id='L35'><code>        val resolved = ReplExec.prepareSkills(builtins, Seq(selected)).ok</code></li>
+<li id='L36'><code>        val dependencyJars = resolved.filterNot(_.universe == selected.universe).flatMap(s =&gt;</code></li>
+<li id='L37'><code>          Seq("--extra-jar", (os.pwd / ".agent-runtime/interface" / s.universe / "impl.jar").toString))</code></li>
+<li id='L38'><code>        os.write.over(preview, SkillScaffold.preview(builtins, resolved), createFolders = true)</code></li>
+<li id='L39'><code>        val _ = os.call(</code></li>
+<li id='L40'><code>          cmd = Seq("scala", "setup-ide", directory.toString, preview.toString) ++ baseline ++</code></li>
+<li id='L41'><code>            dependencyJars ++ Seq("--workspace", directory.toString, "--scala", ReplExec.ScalaVersion, "--scalac-option=-preview"),</code></li>
+<li id='L42'><code>          cwd = directory</code></li>
+<li id='L43'><code>        )</code></li>
+<li id='L44'><code>        directory</code></li>
+<li id='L45'><code>      }</code></li>
+<li id='L46'><code>    }.flatMap(identity)</code></li></ol></html>

@@ -1,0 +1,15 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>skills/coding/scripts/Manifest.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>skills/coding/scripts/Manifest.scala</h1><ol><li id='L1'><code>val Manifest = (</code></li>
+<li id='L2'><code>  universe = "coding",</code></li>
+<li id='L3'><code>  api = "The harness supplies coding: editing.TextFiles for the host-selected workspace. Use list(path), read(path), write(path, text), replace(path, expectedCompleteText, nextText), and edit(path)(transform). Paths are workspace-relative and existing parent directories are required for writes. edit takes a pure String -&gt; String callback: do not capture coding, output, or another capability inside it. Call puts outside the callback. This is a general text editor with no project-specific paths, subprocesses, test runner, Git operations or Python helper. Reading returns ordinary printable text; the workspace grant must exclude credentials. Report path or file errors without attempting another universe to bypass the workspace grant.",</code></li>
+<li id='L4'><code>  predef = "",</code></li>
+<li id='L5'><code>  bindings = Vector(</code></li>
+<li id='L6'><code>    (</code></li>
+<li id='L7'><code>      name = "coding",</code></li>
+<li id='L8'><code>      tpe = "editing.TextFiles",</code></li>
+<li id='L9'><code>      value = "editing.internal.impl()"</code></li>
+<li id='L10'><code>    )</code></li>
+<li id='L11'><code>  )</code></li>
+<li id='L12'><code>)</code></li></ol></html>

@@ -1,0 +1,39 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>src/SkillRunner.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>src/SkillRunner.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import steps.result.Result</code></li>
+<li id='L4'><code>import steps.result.Result.eval.ok</code></li>
+<li id='L5'><code>import steps.result.Result.apply as result</code></li>
+<li id='L6'><code></code></li>
+<li id='L7'><code>/** Direct developer entry point. Does not initialize ScalaAgent or a model provider. */</code></li>
+<li id='L8'><code>object SkillRunner:</code></li>
+<li id='L9'><code>  @mainargs.main(doc = "Execute a Scala snippet directly through ReplExec, without an LLM.")</code></li>
+<li id='L10'><code>  def main(</code></li>
+<li id='L11'><code>      @mainargs.arg(doc = "Skill directory, or basic for standard-library code") skill: String,</code></li>
+<li id='L12'><code>      @mainargs.arg(doc = "Path to a Scala snippet") file: String</code></li>
+<li id='L13'><code>  ): Unit =</code></li>
+<li id='L14'><code>    run(skill, file) match</code></li>
+<li id='L15'><code>      case Result.Ok(output) =&gt;</code></li>
+<li id='L16'><code>        scala.Console.print(output.stdout)</code></li>
+<li id='L17'><code>        scala.Console.err.print(output.stderr)</code></li>
+<li id='L18'><code>        ReplExec.decodeOutput(output) match</code></li>
+<li id='L19'><code>          case ReplExec.ScalaToolResult.Failure(_, _, _) =&gt; sys.exit(1)</code></li>
+<li id='L20'><code>          case _ =&gt; ()</code></li>
+<li id='L21'><code>      case Result.Err(error) =&gt;</code></li>
+<li id='L22'><code>        scala.Console.err.println(error)</code></li>
+<li id='L23'><code>        sys.exit(1)</code></li>
+<li id='L24'><code></code></li>
+<li id='L25'><code>  def run(skillDirectory: String, snippetFile: String): Result[ReplExec.CodeOutput, String] =</code></li>
+<li id='L26'><code>    Result.catchException { case error =&gt; error.toString } {</code></li>
+<li id='L27'><code>      result {</code></li>
+<li id='L28'><code>        val builtins = Skills.loadFrom(os.pwd / "builtin-skills" / "capybara-builtins").ok</code></li>
+<li id='L29'><code>        val selected = skillDirectory.split(",").toSeq.map(_.trim).map { name =&gt;</code></li>
+<li id='L30'><code>          if name == "basic" then Skills.Basic</code></li>
+<li id='L31'><code>          else Skills.loadFrom(if name.contains("/") then os.Path(name, os.pwd) else os.pwd / "skills" / name).ok</code></li>
+<li id='L32'><code>        }</code></li>
+<li id='L33'><code>        val code = Skills.readSafely(os.Path(snippetFile, os.pwd)).ok</code></li>
+<li id='L34'><code>        ReplExec.runCode(builtins, selected, code, CancellationToken.Never).ok</code></li>
+<li id='L35'><code>      }</code></li>
+<li id='L36'><code>    }.flatMap(identity)</code></li></ol></html>

@@ -1,0 +1,46 @@
+// Generated command transcript for skills 'filesystem'.
+// The per-call UUID is normalized; all methods use the actual scaffold templates.
+// Initial ReplDriver language: experimental.captureChecking.
+// Cache packaging, if needed, happens before these REPL commands.
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/capybara-builtins/sigs.jar
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/capybara-builtins/impl.jar
+
+import system_impl.builtins; import builtins.given; import builtins.{puts, putsErr}
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/filesystem/sigs.jar
+
+:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/filesystem/impl.jar
+
+// HOST: clear the language-feature setting before changing mode.
+
+:settings -language:experimental.safe
+
+def agentCode_00000000_0000_0000_0000_000000000001(using output: builtins.OutputStreams, filesystem: fs.Filesystem): Unit = {
+puts(filesystem.list(filesystem.pwd()))
+()
+}
+
+
+// HOST: clear the language-feature setting again.
+
+:settings -language:experimental.captureChecking
+
+def harnessEntry_00000000_0000_0000_0000_000000000001(__harnessStdout: java.io.PrintStream, __harnessStderr: java.io.PrintStream): Boolean =
+{
+given __capybara_output: builtins.OutputStreams = builtins.outputStreams(__harnessStdout, __harnessStderr)
+given __capybara_filesystem: fs.Filesystem = fs.internal.impl()
+try { agentCode_00000000_0000_0000_0000_000000000001(using __capybara_output, __capybara_filesystem); true }
+catch {
+  case scala.util.control.NonFatal(error) =>
+    __capybara_output.printErr(builtins.baseReflectiveShowable(error))
+    false
+}
+}
+
+
+// HOST invocation, not a submitted REPL command:
+// invokeEntryPoint("harnessEntry_00000000_0000_0000_0000_000000000001", stdout.stream, stderr.stream)
+// This reflects the compiled entry method with two host-owned PrintStreams.
+// Finally: resetToInitial(), restore initialState, and clear diagnostics.
