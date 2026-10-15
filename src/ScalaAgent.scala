@@ -24,13 +24,14 @@ object ScalaAgent {
     def requestedUniverses: Seq[String] =
       if universes.nonEmpty then universes else universe.split(",").map(_.trim).filter(_.nonEmpty).toSeq
   type ScalaResolvedChunk = ResolvedChunk[ScalaToolCall, ScalaToolResult]
-  final case class AgentResponse(chunks: Seq[ScalaResolvedChunk], usage: OllamaClient.Usage)
+  final case class AgentResponse(chunks: Seq[ScalaResolvedChunk], usage: OllamaClient.Usage,
+      completesToolLoop: Boolean = false)
   private type RawScalaChunk = (Int, Chunk[ScalaToolCall])
   private final case class RawAgentResponse(chunks: Seq[RawScalaChunk], usage: OllamaClient.Usage)
 
   private val skillsDir = pwd / "skills"
   private val builtinSkillsDir = pwd / "builtin-skills"
-  val Model = "qwen3.6:35b-a3b-coding-nvfp4"
+  val Model = "qwen3.8:27b-mlx"
   val DefaultContextWindow = 32768
   val DefaultKeepAlive = "30m"
   private val ContextWindowEnv = "CAPYBARA_CONTEXT_WINDOW"
@@ -160,7 +161,9 @@ object ScalaAgent {
         contextWindow = contextWindow,
         keepAlive = keepAlive,
         think = think,
-        cancellationToken = cancellationToken
+        cancellationToken = cancellationToken,
+        onStatus = text => log.setStatus(Some(text)),
+        onNotice = text => log.styled(UiRole.Muted, s"[$text]\n")
       )
       catch
         case scala.util.control.NonFatal(error) =>
@@ -195,7 +198,7 @@ object ScalaAgent {
         new java.util.concurrent.atomic.AtomicBoolean(false)
       private var thinkingDone =
         new java.util.concurrent.atomic.AtomicBoolean(false)
-      private var seenAny =
+      private var seenThinking =
         new java.util.concurrent.atomic.AtomicBoolean(false)
 
       private def estimatedTokens(chars: Long): Long =
@@ -220,7 +223,7 @@ object ScalaAgent {
             val heapStatus = RuntimeStatus.heapStatus
             log.setStatus(
               Some(
-                s"${Console.CYAN}[$label: $chunks chunks, ~$tokens tokens$toolStatus, ${elapsedSeconds}s, $heapStatus]${Console.RESET}"
+                s"[$label: $chunks chunks, ~$tokens tokens$toolStatus, ${elapsedSeconds}s, $heapStatus]"
               )
             )
 
@@ -230,30 +233,32 @@ object ScalaAgent {
         updateStatus(label, force = chunks == 1)
 
       private def checkThinkingDone(): Unit =
-        if thinkingDone.compareAndSet(false, true) then log.print("\n")
+        if thinkingDone.compareAndSet(false, true) && seenThinking.get() then
+          log.styled(UiRole.Thinking, "\n")
 
       updateStatus("waiting", force = true)
 
       override def onChunk(chunk: Chunk[ScalaToolCall]): Unit =
-        seenAny.set(true)
         var chunkId = -1
         chunk match {
-          case Chunk.ResponseItems(_) => ()
-          case Chunk.Content(content) =>
+          case Chunk.ResponseItems(_) | Chunk.ProviderState(_, _) => ()
+          case Chunk.Content(content) if content.nonEmpty =>
             recordChunk("receiving content", content.length)
             checkThinkingDone()
-            if seenContent.compareAndSet(false, true) then log.print("-----\n")
-            log.print(Console.BOLD + content + Console.RESET)
+            if seenContent.compareAndSet(false, true) then log.separator()
+            log.styled(UiRole.Assistant, content)
+          case Chunk.Content(_) => ()
           case Chunk.Thinking(thinking) =>
+            seenThinking.set(true)
             recordChunk("thinking", thinking.length)
-            log.print(Console.CYAN + thinking + Console.RESET)
+            log.styled(UiRole.Thinking, thinking)
           case Chunk.Tools(tool_calls) =>
             recordChunk(
               "calling tool",
               tool_calls.map(call => call.arguments.scala_code.length).sum
             )
             checkThinkingDone()
-            if seenTools.compareAndSet(false, true) then log.print("-----\n")
+            if seenTools.compareAndSet(false, true) then log.separator()
             chunkId =
               // later we retrieve based on the offset from the first tool call
               commandCounter.get() + 1
@@ -281,16 +286,18 @@ object ScalaAgent {
                         cancellationToken
                       )
                   case Result.Err(error) =>
+                    val id = ToolExecutionHistory.nextId()
+                    log.executionStarted(id, scalaCode.arguments.requestedUniverses, scalaCode.arguments.scala_code)
+                    log.executionOutput(id, ToolOutputChannel.Stderr, error + "\n")
+                    log.executionFinished(id, ToolExecutionState.Failed)
                     Future.successful(ScalaToolResult.Failure(error))
               promise.tryCompleteWith(result)
-              log.print(
-                s"${Console.YELLOW}${scalaCode.name}[${scalaCode.arguments.requestedUniverses.mkString(",")}]:${Console.RESET}\n"
-              )
-              log.print(
-                s"${Console.YELLOW}```scala${Console.RESET}\n"
-              )
-              log.print(s"${Console.YELLOW}${scalaCode.arguments.scala_code}${Console.RESET}")
-              log.print(s"\n${Console.YELLOW}```${Console.RESET}\n")
+              scalaCode.resultSink.foreach { sink =>
+                result.onComplete {
+                  case scala.util.Success(value) => sink(value.encodeAsJson)
+                  case scala.util.Failure(error) => sink(ScalaToolResult.Failure(error.toString).encodeAsJson)
+                }
+              }
         }
         collected.add((chunkId, chunk))
 
@@ -299,7 +306,8 @@ object ScalaAgent {
           usage: OllamaClient.Usage
       ): Unit =
         updateStatus("complete", force = true)
-        if seenAny.get() then log.print("\n")
+        if seenContent.get() then log.styled(UiRole.Assistant, "\n")
+        else checkThinkingDone()
         chunks.success(
           finalState match
             case ChunkOutputState.Done =>
@@ -321,6 +329,7 @@ object ScalaAgent {
             response.chunks.map({ (id, chunk) =>
               chunk match
                 case Chunk.ResponseItems(items) => ResolvedChunk.ResponseItems(items)
+                case Chunk.ProviderState(provider, state) => ResolvedChunk.ProviderState(provider, state)
                 case Chunk.Content(content)   => ResolvedChunk.Content(content)
                 case Chunk.Thinking(thinking) => ResolvedChunk.Thinking(thinking)
                 case Chunk.Tools(tool_calls)  =>
@@ -334,7 +343,8 @@ object ScalaAgent {
                     }.toVector
                   )
             }),
-            response.usage
+            response.usage,
+            completesToolLoop = request.completesToolLoop
           )
         })
       case err: Result.Err[?] => Future.successful(err)
@@ -361,10 +371,13 @@ object ScalaAgent {
     val toolCalls = Vector.newBuilder[OllamaClient.ToolCall[ScalaToolCall]]
     val toolResults = Vector.newBuilder[OllamaClient.ChatMessage]
     var responseItems: Option[Vector[ujson.Value]] = None
+    var providerState = Map.empty[String, ujson.Value]
 
     chunks.foreach {
       case ResolvedChunk.ResponseItems(items) =>
         responseItems = Some(items)
+      case ResolvedChunk.ProviderState(provider, state) =>
+        providerState += provider -> state
       case ResolvedChunk.Thinking(chunk) =>
         thinking.append(chunk)
       case ResolvedChunk.Content(chunk) =>
@@ -378,13 +391,13 @@ object ScalaAgent {
 
     val accumulatedToolCalls = toolCalls.result()
     val assistant =
-      if thinking.nonEmpty || content.nonEmpty || accumulatedToolCalls.nonEmpty || responseItems.nonEmpty then
+      if thinking.nonEmpty || content.nonEmpty || accumulatedToolCalls.nonEmpty || responseItems.nonEmpty || providerState.nonEmpty then
         Vector(
           OllamaClient.ChatMessage.assistant(
             thinking = thinking.toString,
             content = content.toString,
             toolCalls = accumulatedToolCalls
-          ).copy(responseItems = responseItems)
+          ).copy(responseItems = responseItems, providerState = providerState)
         )
       else Vector.empty
 

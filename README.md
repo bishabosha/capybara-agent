@@ -57,6 +57,297 @@ several atomic skills and their safe API dependencies. `ReplExec` loads baseline
 and predefs in dependency order, then resets the REPL after each execution. Tool results return
 to the model as conversation messages; streamed output goes to the logger.
 
+## Terminal plugins and workflows
+
+Start the interactive harness with `./mill run`. Use `/help` to discover commands;
+Tab completes built-in and plugin commands. The bundled Scala workflow plugin adds:
+
+| Command | Workflow |
+| --- | --- |
+| `/plan <goal>` | Inspect relevant code and propose steps and validation before implementation |
+| `/review [scope]` | Review current changes, a file, or a named area for concrete bugs |
+| `/handoff [focus]` | Summarize the conversation, verified results, and remaining work for another session |
+
+For example:
+
+```text
+/plan add retry handling to the streaming client
+Implement the plan, keeping the provider interfaces compatible.
+/review the retry handling and cancellation paths
+/handoff focus on validation that still needs a live provider
+```
+
+These commands submit ordinary prompts through the existing agent loop, history,
+thinking mode, token accounting, and cancellation. Planning and review request
+no writes in their prompts; they do not enforce a separate read-only capability
+policy. `/clear` cancels the current turn and clears conversation history;
+`/plugins` lists loaded plugins. Existing `/x`, `/usage`, `/sys-prompt`, and
+`/think on|off|auto` commands remain available.
+
+### Write a Scala plugin
+
+Select a plugin source directory explicitly:
+
+```sh
+./mill run --plugin-dir examples/plugins
+```
+
+This loads the bundled workflows plus the example `focus`, `aurora-ui`, and
+`split-view` plugins:
+
+```text
+/focus Keep changes small and explain each validation result
+/plan improve streaming error messages
+/flow-stats
+/focus off
+```
+
+Every immediate child directory defines one plugin. For example:
+
+```text
+my-plugins/
+  greeting/
+    Manifest.scala
+    GreetingPlugin.scala
+```
+
+`Manifest.scala` uses the same Scala Object Notation reader as skill manifests.
+It names a public class with a no-argument constructor and lists dependency JARs
+relative to the plugin directory:
+
+```scala
+val Manifest = (
+  entrypoint = "example.GreetingPlugin",
+  classpath = Vector() // Or Vector("lib/helper.jar", "lib/another.jar")
+)
+```
+
+The manifest is read as data and excluded from plugin compilation. Both fields
+are required; use an empty `Vector()` when no dependency JARs are needed.
+
+```scala
+package example
+
+import capybara.agent.*
+
+final class GreetingPlugin extends HarnessPlugin:
+  val id = "greeting"
+  val description = "A custom investigation workflow"
+  override val commands = Seq(
+    PluginCommand("investigate", "Investigate a problem before changing code", (args, context) =>
+      if args.isBlank then PluginAction.Message("usage: /investigate <problem>")
+      else PluginAction.Submit(
+        s"Investigate this problem in ${context.workspace}. Gather evidence and propose a fix: $args"
+      ))
+  )
+```
+
+Run `./mill run --plugin-dir my-plugins`, then `/investigate <problem>`.
+All `.scala` files under each child directory compile against the running host's
+classpath and Scala version, using its bundled compiler and a Java subprocess.
+Plugins can use host dependencies; dependency directives such as `//> using dep`
+are not resolved. No separate publishing or service descriptor is required.
+The entry point must be a class, rather than a Scala `object`.
+
+The typed API in `src/HarnessPlugin.scala` provides:
+
+- `commands`: named slash commands returning a local `Message` or an agent `Submit`.
+- `configureUi`: compose the prompt, semantic palette, status display, and live panel layout.
+- `transformPrompt`: transform every submitted prompt, including workflow prompts,
+  in deterministic plugin order. A failed or empty transform prevents submission.
+- `onEvent`: observe session start/close and turn start/completion/failure/cancellation.
+- `close`: release resources when a plugin is replaced or the terminal exits.
+
+Callbacks receive `PluginContext`, with the workspace path and an immutable
+snapshot of committed conversation history. Successful completion events see the
+updated history. Callbacks run serially for a session; keep them short so input
+and cancellation remain responsive. Plugin errors are reported locally. A failed
+observer does not stop the other observers, and a failed command does not call
+the model. Failed turns do not commit partial conversation history.
+
+The workflow plugin loads first, then source plugins in directory-name order.
+Plugin IDs and command names must match `[a-z][a-z0-9-]*` and be unique. Plugins
+cannot override built-in commands. The source loader checks the whole set before
+installing it. Initial loading errors abort startup with diagnostics.
+
+Edit sources, then use `/reload` without restarting the terminal. Reload is
+allowed while idle; use `/x` first if a turn is running. A replacement set is
+compiled and validated before the old set closes. Compilation or registration
+failure keeps the old plugins active. Successful reload preserves conversation
+history and thinking mode, and resets plugin instance state. Temporary compiled
+classes and class loaders are released on replacement or exit.
+
+**Trust:** plugins run as local host code with filesystem, process, and network
+access. They can read conversation history and change submitted prompts. Load
+source directories you trust. They are distinct from model skills: generated
+Scala still uses the existing capability-checked skill runtime. Source plugins
+are opt-in, available only in interactive mode, and are never loaded from an
+implicit project or home directory.
+
+### UI plugins: themes and split views
+
+UI plugins use the same Scala source loader and lifecycle as workflow plugins.
+Override `configureUi` to transform an immutable `TerminalUi`. For example:
+
+```scala
+package example
+
+import capybara.agent.*
+
+final class MyTheme extends HarnessPlugin:
+  val id = "my-theme"
+  val description = "A compact workspace prompt"
+
+  override def configureUi(ui: TerminalUi): TerminalUi = ui.copy(
+    prompt = "λ ",
+    promptHeader = "{workspace}",
+    rightPrompt = "{state} · {turns} turns · think {thinking}",
+    banner = "Welcome to my workspace",
+    readyMessage = "ready",
+    styles = ui.styles.updated(UiRole.Prompt, TerminalStyle(TerminalColor.Magenta, bold = true))
+  )
+```
+
+Set `entrypoint = "example.MyTheme"` in that plugin's `Manifest.scala`. Themes can
+customize the banner, goodbye message, separators, prompt/header/right prompt,
+status visibility, color use, and styles for assistant text, thinking, tool calls,
+tool stdout/stderr, success, errors, and muted text. Prompt templates support
+`{cwd}`, `{workspace}`, `{turns}`, `{thinking}`, and `{state}`. Session widgets
+update when a turn starts, completes, is interrupted, or the conversation clears.
+`turns` counts successful turns in the current conversation.
+
+Plugins can bundle dependency JARs in their own `lib/` directory, for example
+`my-plugin/lib/helper.jar`, and list `"lib/helper.jar"` in the manifest's
+`classpath`. Only listed JARs are added to that plugin's compilation and
+runtime classpaths; sibling plugins do not see them. Include transitive dependency
+JARs too, or bundle a shaded assembly. The loader is parent-first: the host's
+classes, plugin API, Scala runtime, and existing dependencies take precedence.
+If a plugin needs an incompatible version of a host dependency, relocate that
+dependency's packages when building its shaded JAR. Keep `capybara.agent` API types
+and Scala runtime packages shared, and build against the host's Scala version.
+The harness loads supplied JARs; it does not resolve Maven dependencies or shade
+artifacts at runtime. `/reload` creates fresh loaders for the updated JARs.
+
+The `aurora-ui` example includes `/theme aurora` and `/theme plain`; plain mode
+uses the original prompt and disables colors. UI configuration is composed in
+plugin order, starts from the host defaults each time, and is recomputed after
+successful plugin commands. A plugin can keep a selected theme in instance state
+and change it with a command. Invalid UI configurations preserve the installed
+appearance and report the responsible plugin. `/reload` also reloads the UI;
+removing a theme restores the defaults while preserving the conversation.
+
+The `split-view` example is inspired by
+[pi-split-view](https://github.com/Hugo-W/pi-split-view). It provides a live
+**Thinking | Executions | Output** band at the top, a conversation viewport in the middle,
+and a fixed input composer at the bottom. JLine still handles input editing,
+completion, and command history:
+
+```text
+/theme aurora
+/split-response
+/executions
+/execution older
+/execution latest
+/plan inspect the cancellation paths
+/split-height 8
+/split-thinking
+/split-tools
+/split
+```
+
+`/split` toggles the whole band; `/split-thinking` and `/split-tools` toggle
+the thinking pane and the execution/output pair. Thinking, code executions, and tool
+output appear only in their panels by default. The main transcript shows assistant
+replies and one compact line per tool call with its ID, tool name, skills, and a
+code preview clipped to the terminal width. `/split-response` toggles tool details in future transcript writes
+while keeping the execution/output panes live. It does not rewrite earlier
+conversation entries. Turning a pane off makes its stream visible in the transcript again.
+The Executions pane shows the selected Scala snippet with
+[Scalameta](https://scalameta.org/docs/trees/guide) Scala 3 token highlighting.
+Keywords, strings, numbers, comments, and type-like identifiers have distinct
+colours, preserved through wrapping and scrolling. Plain themes disable colours;
+theme plugins can override `UiRole.CodeKeyword`, `CodeString`, `CodeNumber`,
+`CodeComment`, and `CodeType` styles. Invalid or truncated tokens fall back to
+plain code. Highlighting does not compile or execute the snippet.
+Output shows that call's
+stdout and stderr, labelled by channel and updated while the call runs. `puts`
+and `putsErr` output appears as soon as each structured record is emitted,
+including during long-running calls. The model still receives the complete
+captured result after execution. Output buffered by a library becomes visible
+when that library writes to the supplied stream.
+
+`/executions` lists retained calls with IDs, state, skills and a code preview.
+`/execution <id>` or `/execution older` / `/execution newer` switches both panes
+together. Selecting a call pins it while newer calls run; `/execution latest`
+resumes following new executions. History keeps the last 100 calls, with bounded
+code and output previews (32,768 characters and 512 output chunks per call).
+States distinguish queued, running, succeeded, failed and cancelled calls;
+partial output remains available after failure or cancellation. `/clear` also
+clears execution history; `/reload` preserves it.
+
+The composer stays at the bottom even when `/split` hides every panel. Keyboard
+focus selects which area scrolls; it leaves the input draft editable.
+
+**Shift-Tab** cycles **Input → Executions → Output → Conversation → Input**.
+**↑/↓** scroll one line in the focused panel or conversation; command history
+uses these keys only when **Input** has focus. **Esc** returns focus to Input.
+When **Executions** or **Output** has focus, **←/→** selects the previous/next
+retained execution; both panes switch together and keep their focus. Code starts
+at the beginning and output at the end of the newly selected call. Moving right
+to the newest call resumes following new executions. At the first/last call,
+navigation stops rather than wrapping. In Input, ←/→ still move the text cursor.
+Tab still completes commands. The status row names the current focus.
+Page Up/Down scroll one page in the focused area.
+
+| Optional shortcut (release Ctrl+X before the second key) | Action |
+| --- | --- |
+| **Ctrl+X, then F** | Cycle focus, same as Shift-Tab |
+| **Ctrl+X, then C / E / O** | Focus Conversation / Executions / Output directly |
+| **Ctrl+X, then P / N** | Scroll the focused area up / down one page |
+| **Ctrl+X, then T / B** | Jump to the top / end of the focused area |
+
+Page Up/Down also scroll the focused area; on a MacBook these are Fn+↑/↓ if
+the terminal forwards them. Holding Ctrl for the second P/N key also works.
+The focused panel has a `>` marker and visible line range in its title; the
+status row identifies the focus. Code and output keep independent scroll positions.
+Output follows new text at the end; scrolling back holds the current position until
+you scroll to the end or press Ctrl+X, then B. Changing execution resets code to
+the beginning and output to the end. Submitting a prompt returns the conversation
+to its latest content. Panels too small to display fall back to conversation focus.
+`/split-height <3..20>` sets the requested band height, capped at one third of
+the terminal height so the editor and conversation retain space.
+
+Plugins declare `UiPanel(id, title, roles, weight, content)` values in `TerminalUi.panels`.
+`content` defaults to `UiPanelContent.Streams`; `ExecutionCode` and
+`ExecutionOutput` select the host's execution-history views. The host routes
+semantic output to stream panes, wraps and clips by display
+columns, and stacks panes on narrow terminals. Layouts support up to four panes.
+Buffers retain at most 16,384 characters and 512 coalesced chunks, in emission
+order. Repaints are coalesced at 100 ms, including terminal size changes, and
+share JLine's editor display lock. Headers show idle/running state; empty panes
+explain whether they are waiting for output or thinking is disabled. Rendering
+failures are reported and restore transcript output instead of silently stopping
+the repaint timer. A subsequent UI change or `/reload` retries the panel display.
+`/clear` clears the conversation viewport and panel buffers; `/reload` preserves
+the conversation and execution history, and clears generic stream panels. The viewport retains the most recent
+65,536 characters. This layout uses the terminal's alternate screen, restoring
+the shell on exit. When the terminal lacks the required capabilities or is too
+small, output falls back to ordinary terminal scrollback. The example does not
+include Pi's file/diff dock.
+
+UI plugins select `layout = TerminalLayout.Fullscreen` for this composition.
+`TerminalLayout.Scrollback` retains the ordinary terminal layout with a bottom
+status band. Theme-only plugins inherit whichever layout earlier plugins chose.
+The full-screen compositor uses immutable snapshots and JLine's display lock,
+so streamed output and typing share a single display owner.
+
+Restart the harness after changing host code (including the reader or logger);
+`/reload` recompiles plugin sources only. `TerminalReplaySuite` exercises the real
+harness in a pseudo-terminal against a local streaming provider, with panel
+streams hidden from ordinary transcript output. Run it through the Metals MCP
+test tool to verify provider-to-panel routing, top/bottom screen coordinates,
+completion, draft preservation, and resizing without a live model or credentials.
+
 ## How skills work
 
 A skill adds a Scala API to a named execution **universe**. At startup,
@@ -399,6 +690,76 @@ the full composed workflow with a local HTTP fixture and synthetic credentials.
 
 Ollama is the default provider, using `qwen3.6:35b-a3b-coding-nvfp4`
 at `http://localhost:11434`. Override the model with `CAPYBARA_MODEL`.
+
+For Apple's on-device model through the native
+[Foundation Models Python SDK](https://apple.github.io/python-apple-fm-sdk/), select
+`apple-fm`. This bypasses `fm serve` and uses real SDK tool callbacks:
+
+```sh
+export CAPYBARA_PROVIDER=apple-fm
+./mill run --plugin-dir examples/plugins
+```
+
+This integration is optional and lazy. Selecting another provider does not inspect
+Python, extract the bridge script, import the SDK, or load any Apple library.
+The JVM build has no Apple or Python dependency. The selected `apple-fm` provider
+requires a supported Apple Silicon Mac with Apple Intelligence and a usable
+Python 3.10+ installation with venv/pip support. The first selected request
+creates a private virtual environment, installs the pinned SDK (currently 0.2.1),
+and verifies it before marking it ready. The persistent environment lives at
+`~/Library/Caches/capybara-agent/apple-fm/sdk-0.2.1` and is reused across runs and
+workspaces. Setup is locked across processes; interrupted or failed installs are
+retried on the next request. Installation progress appears in the terminal status.
+The initial download/build needs network access and the SDK's macOS/toolchain
+prerequisites.
+
+`CAPYBARA_APPLE_FM_PYTHON` optionally selects an existing interpreter with the SDK
+already installed and bypasses managed setup. Unset an earlier temporary override
+to use the managed environment. `CAPYBARA_MODEL` defaults to `system`.
+`CAPYBARA_BASE_URL` and API keys are unused for this provider.
+
+Each selected provider request starts a Python subprocess and imports the SDK there. It
+forwards typed native tool callbacks over stdio to the existing Scala executor;
+the JVM still validates skills, compiles code, captures live stdout/stderr, and
+returns the tool result. The SDK resumes generation with the actual result.
+Completed native transcripts are retained in conversation history and restored
+with registered tools for the next turn. `/clear` resets that history. No Markdown
+or ordinary model text is interpreted as a tool request. `/x` terminates the
+current bridge process and cancels Scala execution. Each turn is bounded to 32
+tool callbacks. Python/SDK failures appear as provider errors, and its diagnostics
+are captured without writing over the terminal UI.
+
+SDK text snapshots are converted to streamed deltas. Token usage is currently
+unavailable from this provider. The bridge uses the native context capacity and
+SDK token counts to reserve generation space and shorten old model context before
+it fills. The local `system` model currently reports a 4,096-token window, shared
+by instructions, tool definitions, history, tool results, and the generated reply;
+the SDK's reported capacity is used rather than a hardcoded limit.
+It removes complete older turns, keeping native tool calls paired with
+their results and preserving the most recent turn when it fits. A visible notice
+explains the rollover; terminal/chat history is retained. Large tool results get
+an explicitly truncated preview for the model while the harness keeps the original.
+
+A native overflow may retry with fresh context only before any tool execution or
+visible answer. It never replays a tool that already ran. A single oversized input
+or a tool-heavy turn that still exceeds capacity produces an actionable error.
+Ollama-specific thinking, context-window and keep-alive settings do not configure
+this provider. It currently exposes the harness's `run_scala_code` tool and
+supports the `system` model.
+
+`AppleFmClientSuite` covers the transport with SDK stand-ins on any platform
+(Python subprocess checks skip if Python is absent). `AppleFmEnvironmentSuite`
+covers persistent setup, retries, and concurrent installation;
+`AppleFmContextSuite` covers context rollover, result previews, and safe recovery.
+`AppleFmNativeSuite` is
+opt-in: set `CAPYBARA_TEST_APPLE_FM_PYTHON` in the test host's environment to run
+real on-device execution and multi-turn acceptance checks. Ordinary test runs
+do not contact Apple models.
+
+Ollama requests allow up to ten minutes before timing out, including cold model
+loading and prompt evaluation. Set `CAPYBARA_OLLAMA_TIMEOUT_SECONDS` to a positive
+number of seconds to change this limit. Transport errors include their underlying
+cause so timeouts and connection failures can be distinguished.
 
 To use an OpenAI Chat Completions compatible API through
 [sttp-ai](https://github.com/softwaremill/sttp-ai), configure the environment

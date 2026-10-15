@@ -13,7 +13,9 @@ object ModelProvider:
       contextWindow: Int,
       keepAlive: String,
       think: Boolean,
-      cancellationToken: CancellationToken
+      cancellationToken: CancellationToken,
+      onStatus: String => Unit = _ => (),
+      onNotice: String => Unit = _ => ()
   ): OllamaClient.ChunkRequest[OllamaClient.Chunk[T]] =
     setting("CAPYBARA_PROVIDER").getOrElse("ollama") match
       case "ollama" =>
@@ -27,6 +29,10 @@ object ModelProvider:
           think = think,
           cancellationToken = cancellationToken
         )
+      case "apple-fm" =>
+        AppleFmClient.request(messages, tools, toolParsers, cancellationToken,
+          python = setting("CAPYBARA_APPLE_FM_PYTHON").getOrElse(""),
+          model = setting("CAPYBARA_MODEL").getOrElse("system"), onStatus = onStatus, onNotice = onNotice)
       case provider @ ("openai" | "openai-responses") =>
         val model = setting("CAPYBARA_MODEL").getOrElse(
           throw IllegalArgumentException(s"CAPYBARA_MODEL is required for the $provider provider")
@@ -53,4 +59,4 @@ object ModelProvider:
         )
       case other =>
         throw IllegalArgumentException(
-          s"Unknown CAPYBARA_PROVIDER '$other'; expected ollama, openai, or openai-responses")
+          s"Unknown CAPYBARA_PROVIDER '$other'; expected ollama, openai, openai-responses, or apple-fm")

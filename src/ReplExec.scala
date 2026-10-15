@@ -34,12 +34,38 @@ object ReplExec {
         ujson.write(ujson.Obj("executionError" -> error, "stdout" -> ujson.Arr.from(stdout), "stderr" -> ujson.Arr.from(stderr)))
       case NoOutput => ujson.write(ujson.Obj("success" -> true, "stdout" -> ujson.Arr(), "stderr" -> ujson.Arr()))
 
-  private class StreamCapture:
+  /** Capture exact bytes for the model while publishing complete UTF-8 records immediately. */
+  private class StreamCapture(onLine: String => Unit):
     private val bytes = new ByteArrayOutputStream()
-    val stream = new PrintStream(bytes, true, UTF_8)
-    def content: String =
+    private val pending = new ByteArrayOutputStream()
+    private def publish(): Unit =
+      if pending.size() > 0 then
+        val line = pending.toString(UTF_8)
+        pending.reset()
+        try onLine(line)
+        catch case scala.util.control.NonFatal(_) => ()
+    private val sink = new java.io.OutputStream:
+      override def write(value: Int): Unit = StreamCapture.this.synchronized {
+        bytes.write(value)
+        pending.write(value)
+        if value == '\n'.toInt then publish()
+      }
+      override def write(data: Array[Byte], offset: Int, length: Int): Unit =
+        StreamCapture.this.synchronized {
+          bytes.write(data, offset, length)
+          var index = offset
+          while index < offset + length do
+            pending.write(data(index))
+            if data(index) == '\n'.toByte then publish()
+            index += 1
+        }
+      override def close(): Unit = StreamCapture.this.synchronized { publish() }
+    val stream = new PrintStream(sink, true, UTF_8)
+    def content: String = this.synchronized {
       stream.flush()
+      publish()
       bytes.toString(UTF_8)
+    }
 
   private object lock
   private object compileLock
@@ -261,7 +287,8 @@ object ReplExec {
         skills: Seq[Skill],
         apiSkills: Seq[Skill],
         scalaCode: String,
-        cancellationToken: CancellationToken
+        cancellationToken: CancellationToken,
+        onOutput: (ToolOutputChannel, String) => Unit
     ): Result[CodeOutput, String] =
       if cancellationToken.isCancelled then Result.Err("cancelled")
       else
@@ -269,8 +296,8 @@ object ReplExec {
           val uuid = java.util.UUID.randomUUID().toString.replaceAll("-", "_")
           val methodName = s"agentCode_$uuid"
           val entryName = s"harnessEntry_$uuid"
-          val stdout = new StreamCapture
-          val stderr = new StreamCapture
+          val stdout = new StreamCapture(line => onOutput(ToolOutputChannel.Stdout, line))
+          val stderr = new StreamCapture(line => onOutput(ToolOutputChannel.Stderr, line))
           val trackedExecution = trackExecution(cancellationToken)
           try
             result {
@@ -354,12 +381,21 @@ object ReplExec {
       selected: Seq[Skill],
       scalaCode: String,
       cancellationToken: CancellationToken
+  ): Result[CodeOutput, String] =
+    runCodeObserved(builtins, selected, scalaCode, cancellationToken, (_, _) => ())
+
+  private[agent] def runCodeObserved(
+      builtins: Skill,
+      selected: Seq[Skill],
+      scalaCode: String,
+      cancellationToken: CancellationToken,
+      onOutput: (ToolOutputChannel, String) => Unit
   ): Result[CodeOutput, String] = lock.synchronized {
     try
       prepareSkills(builtins, selected).flatMap { skills =>
         val available = selected ++ Skills.loadAll(os.pwd / "skills") :+ Skills.Basic
         Skills.resolve(selected.map(_.universe), available, builtins, includeApis = true).flatMap { apis =>
-          globalSession.runExpression(builtins, skills, apis, scalaCode, cancellationToken)
+          globalSession.runExpression(builtins, skills, apis, scalaCode, cancellationToken, onOutput)
         }
       }
     catch
@@ -435,7 +471,18 @@ object ReplExec {
       cancellationToken: CancellationToken
   )(using ExecutionContext): Future[ScalaToolResult] =
     def strippedAnsi(str: String): String =
-      str.replaceAll("\u001B\\[[;\\d]*m", "")
+      Option(str).getOrElse("Unknown error").replaceAll("\u001B\\[[;\\d]*m", "")
+    val executionId = ToolExecutionHistory.nextId()
+    log.executionStarted(executionId, skills.map(_.universe), scalaCode)
+    def liveOutput(channel: ToolOutputChannel, line: String): Unit =
+      val display = scala.util.Try {
+        val data = ujson.read(line)
+        val value = data.obj.get("special.success").orElse(data.obj.get("special.error")).getOrElse(data)
+        value match
+          case ujson.Str(text) => text
+          case other => other.render(indent = 2)
+      }.getOrElse(line.stripTrailing())
+      log.executionOutput(executionId, channel, display + "\n")
     Future[Result[CodeOutput, String]] {
       scala.concurrent.blocking {
         if cancellationToken.isCancelled then Result.Err("cancelled")
@@ -443,10 +490,12 @@ object ReplExec {
           val monitor =
             RuntimeStatus.monitor(
               log,
-              s"running tool #$callId",
+              s"running execution #$executionId",
               shouldUpdate = () => !cancellationToken.isCancelled
             )
-          try runCode(builtins, skills, scalaCode, cancellationToken)
+          try
+            log.executionRunning(executionId)
+            runCodeObserved(builtins, skills, scalaCode, cancellationToken, liveOutput)
           finally monitor.close()
       }
     }.transform({ try0 =>
@@ -461,26 +510,17 @@ object ReplExec {
           ScalaToolResult.Failure(
             s"Exception while executing code: ${strippedAnsi(exception.getMessage)}"
           )
-      locally {
-        normalized.match
-          case ScalaToolResult.NoOutput => ()
-          case ScalaToolResult.Success(stdout, stderr) =>
-            logOutputs(stdout, stderr, callId, log)
-          case ScalaToolResult.Failure(ujson.Str("cancelled"), _, _) =>
-            ()
-          case ScalaToolResult.Failure(error, stdout, stderr) =>
-            logOutputs(stdout, stderr, callId, log)
-            log.print(
-              s"${Console.RED}Error executing code chunk [$callId]:\n---\n${error.render(indent = 2)}${Console.RESET}\n"
-            )
-      }
+      val state =
+        if cancellationToken.isCancelled then ToolExecutionState.Cancelled
+        else normalized match
+          case ScalaToolResult.Failure(error, _, _) =>
+            log.executionOutput(executionId, ToolOutputChannel.Stderr,
+              "Execution failed: " + error.render(indent = 2) + "\n")
+            ToolExecutionState.Failed
+          case _ => ToolExecutionState.Succeeded
+      log.executionFinished(executionId, state)
       scala.util.Success(normalized)
     })
-
-  private def logOutputs(stdout: Vector[ujson.Value], stderr: Vector[ujson.Value], callId: Int, log: Logger): Unit =
-    for (channel, values, color) <- Seq(("stdout", stdout, Console.GREEN), ("stderr", stderr, Console.RED)) do
-      if values.nonEmpty then
-        log.print(s"${color}$channel for code chunk [$callId]:\n${values.map(_.render()).mkString("\n")}${Console.RESET}\n")
 
   def compileSkill(skill: Skill, dependencies: Seq[Skill] = Nil): os.Path = {
     val dependencyJars = dependencies.map(d => os.pwd / ".agent-runtime/interface" / d.universe / "sigs.jar")
@@ -497,6 +537,11 @@ object ReplExec {
       try f(tempFile)
       finally os.remove(tempFile)
     }
+    def packageRuntime(arguments: Seq[String]): Unit =
+      // Compiler subprocesses must not write over the full-screen terminal.
+      val compiled = os.proc(arguments).call(check = false, stdout = os.Pipe, stderr = os.Pipe)
+      if compiled.exitCode != 0 then
+        throw IllegalStateException(compiled.out.text() + compiled.err.text())
     val outdir = os.pwd / ".agent-runtime" / "interface" / skill.name
     os.makeDir.all(outdir)
     val targetSigJar = outdir / "sigs.jar"
@@ -519,8 +564,8 @@ object ReplExec {
           )
           os.write.over(tempInterface, skill.interface)
           withTempFile(tempDir, "sigs.jar") { sigsJar =>
-            val _ = os.call(
-              cmd = Seq(
+            val _ = packageRuntime(
+              Seq(
                 "scala",
                 "--power",
                 "package",
@@ -547,8 +592,8 @@ object ReplExec {
               val code0 = (directives0 ++ file).mkString(java.lang.System.lineSeparator())
               os.write.over(tempCode, code0)
               withTempFile(tempDir, "impl.jar") { implJar =>
-                val _ = os.call(
-                  cmd = Seq(
+                val _ = packageRuntime(
+                  Seq(
                     "scala",
                     "--power",
                     "package",

@@ -2,7 +2,13 @@ package capybara
 
 package object agent:
 
-  def main(query: Option[String]) = runAgent(query)
+  def main(
+      query: Option[String],
+      @mainargs.arg(doc = "Directory of trusted Scala harness plugins (interactive mode)")
+      pluginDir: Option[String] = None
+  ) =
+    require(query.isEmpty || pluginDir.isEmpty, "--plugin-dir is supported in interactive mode only")
+    runAgent(query, pluginDir)
 
   @main def run(args: String*): Unit =
     val _ =
