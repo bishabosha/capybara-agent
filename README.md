@@ -57,6 +57,123 @@ several atomic skills and their safe API dependencies. `ReplExec` loads baseline
 and predefs in dependency order, then resets the REPL after each execution. Tool results return
 to the model as conversation messages; streamed output goes to the logger.
 
+## Terminal plugins and workflows
+
+Start the interactive harness with `./mill run`. Use `/help` to discover commands;
+Tab completes built-in and plugin commands. The bundled Scala workflow plugin adds:
+
+| Command | Workflow |
+| --- | --- |
+| `/plan <goal>` | Inspect relevant code and propose steps and validation before implementation |
+| `/review [scope]` | Review current changes, a file, or a named area for concrete bugs |
+| `/handoff [focus]` | Summarize the conversation, verified results, and remaining work for another session |
+
+For example:
+
+```text
+/plan add retry handling to the streaming client
+Implement the plan, keeping the provider interfaces compatible.
+/review the retry handling and cancellation paths
+/handoff focus on validation that still needs a live provider
+```
+
+These commands submit ordinary prompts through the existing agent loop, history,
+thinking mode, token accounting, and cancellation. Planning and review request
+no writes in their prompts; they do not enforce a separate read-only capability
+policy. `/clear` cancels the current turn and clears conversation history;
+`/plugins` lists loaded plugins. Existing `/x`, `/usage`, `/sys-prompt`, and
+`/think on|off|auto` commands remain available.
+
+### Write a Scala plugin
+
+Select a plugin source directory explicitly:
+
+```sh
+./mill run --plugin-dir examples/plugins
+```
+
+This loads the bundled workflows plus the example `focus` plugin:
+
+```text
+/focus Keep changes small and explain each validation result
+/plan improve streaming error messages
+/flow-stats
+/focus off
+```
+
+Every immediate child directory defines one plugin. For example:
+
+```text
+my-plugins/
+  greeting/
+    plugin.properties
+    GreetingPlugin.scala
+```
+
+`plugin.properties` names a public class with a no-argument constructor:
+
+```properties
+class=example.GreetingPlugin
+```
+
+```scala
+package example
+
+import capybara.agent.*
+
+final class GreetingPlugin extends HarnessPlugin:
+  val id = "greeting"
+  val description = "A custom investigation workflow"
+  override val commands = Seq(
+    PluginCommand("investigate", "Investigate a problem before changing code", (args, context) =>
+      if args.isBlank then PluginAction.Message("usage: /investigate <problem>")
+      else PluginAction.Submit(
+        s"Investigate this problem in ${context.workspace}. Gather evidence and propose a fix: $args"
+      ))
+  )
+```
+
+Run `./mill run --plugin-dir my-plugins`, then `/investigate <problem>`.
+All `.scala` files under each child directory compile against the running host's
+classpath and Scala version, using its bundled compiler and a Java subprocess.
+Plugins can use host dependencies; dependency directives such as `//> using dep`
+are not resolved. No separate publishing or service descriptor is required.
+The entry point must be a class, rather than a Scala `object`.
+
+The typed API in `src/HarnessPlugin.scala` provides:
+
+- `commands`: named slash commands returning a local `Message` or an agent `Submit`.
+- `transformPrompt`: transform every submitted prompt, including workflow prompts,
+  in deterministic plugin order. A failed or empty transform prevents submission.
+- `onEvent`: observe session start/close and turn start/completion/failure/cancellation.
+- `close`: release resources when a plugin is replaced or the terminal exits.
+
+Callbacks receive `PluginContext`, with the workspace path and an immutable
+snapshot of committed conversation history. Successful completion events see the
+updated history. Callbacks run serially for a session; keep them short so input
+and cancellation remain responsive. Plugin errors are reported locally. A failed
+observer does not stop the other observers, and a failed command does not call
+the model. Failed turns do not commit partial conversation history.
+
+The workflow plugin loads first, then source plugins in directory-name order.
+Plugin IDs and command names must match `[a-z][a-z0-9-]*` and be unique. Plugins
+cannot override built-in commands. The source loader checks the whole set before
+installing it. Initial loading errors abort startup with diagnostics.
+
+Edit sources, then use `/reload` without restarting the terminal. Reload is
+allowed while idle; use `/x` first if a turn is running. A replacement set is
+compiled and validated before the old set closes. Compilation or registration
+failure keeps the old plugins active. Successful reload preserves conversation
+history and thinking mode, and resets plugin instance state. Temporary compiled
+classes and class loaders are released on replacement or exit.
+
+**Trust:** plugins run as local host code with filesystem, process, and network
+access. They can read conversation history and change submitted prompts. Load
+source directories you trust. They are distinct from model skills: generated
+Scala still uses the existing capability-checked skill runtime. Source plugins
+are opt-in, available only in interactive mode, and are never loaded from an
+implicit project or home directory.
+
 ## How skills work
 
 A skill adds a Scala API to a named execution **universe**. At startup,

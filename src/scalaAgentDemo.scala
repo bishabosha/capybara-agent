@@ -5,12 +5,10 @@ import scala.concurrent.Future
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
 import steps.result.Result
-import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 
 private val MaxAgentRequests = 16
 
-def runAgent(query: Option[String]) =
+def runAgent(query: Option[String], pluginDir: Option[String] = None) =
   val contextWindow = ScalaAgent.configuredContextWindow
   val keepAlive = ScalaAgent.configuredKeepAlive
   val usageTracker = UsageTracker(Some(contextWindow))
@@ -31,70 +29,26 @@ def runAgent(query: Option[String]) =
           .map(printErrorIfNeeded)
       )
     case None =>
-      val chatHistory =
-        AtomicReference[Vector[OllamaClient.ChatMessage]](Vector.empty)
-      val activeRun = AtomicLong(0)
-      val activeToken =
-        AtomicReference[CancellationToken | Null](null)
-      val thinkingMode =
-        AtomicReference[ThinkingInference.ThinkingMode](defaultThinkingMode)
-      Terminal.run { query =>
-        val logger = summon[Logger]
-        query.trim match
-          case "/x" =>
-            val previous = activeToken.getAndSet(null)
-            if previous != null then previous.cancel()
-            val replInterrupted = ReplExec.interruptActiveExecution()
-            if previous != null || replInterrupted then
-              logger.print("\n[interrupt requested]\n")
-              printReadyForNextTurn()(using logger)
-            else logger.print("[nothing to interrupt]\n")
-          case "/usage" =>
-            logger.print(usageTracker.render)
-          case "/sys-prompt" =>
-            logger.print(s"${ScalaAgent.SystemPrompt}\n")
-          case "/think" =>
-            logger.print(s"thinking mode: ${thinkingMode.get().displayName}\n")
-          case command if command.startsWith("/think ") =>
-            val rawMode = command.stripPrefix("/think").trim
-            ThinkingInference.ThinkingMode.parse(rawMode) match
-              case Some(mode) =>
-                thinkingMode.set(mode)
-                logger.print(s"thinking mode: ${mode.displayName}\n")
-              case None =>
-                logger.print("usage: /think on | /think off | /think auto\n")
-          case _ =>
-            val previous = activeToken.getAndSet(null)
-            if previous != null then
-              previous.cancel()
-              val _ = ReplExec.interruptActiveExecution()
-              logger.print("\n[interrupted]\n")
-
-            val runId = activeRun.incrementAndGet()
-            val token = CancellationToken()
-            activeToken.set(token)
-            val startingHistory = chatHistory.get()
-            val mode = thinkingMode.get()
-            val think = ThinkingInference.shouldThink(query, mode)
-            printThinking(mode, think)(using logger)
-
-            runSession(query, startingHistory, usageTracker, contextWindow, keepAlive, mode, token)
-              .foreach { result =>
-                val isCurrent = activeRun.get() == runId && !token.isCancelled
-                if isCurrent then
-                  val _ = activeToken.compareAndSet(token, null)
-                  result match
-                    case Result.Ok(updatedHistory) =>
-                      chatHistory.set(updatedHistory)
-                    case Result.Err("cancelled") =>
-                      ()
-                    case Result.Err(error) =>
-                      printError(error)(using logger)
-                  printReadyForNextTurn()(using logger)
-                else ()
-              }
-        Terminal.NextState.Continue
-    }
+      val directory = pluginDir.map(path => os.Path(path, os.pwd))
+      HarnessPlugins.load(directory) match
+        case Left(error) => throw IllegalArgumentException(error)
+        case Right(plugins) =>
+          val session = InteractiveSession(
+            plugins,
+            () => HarnessPlugins.load(directory),
+            () => usageTracker.render,
+            () => ScalaAgent.SystemPrompt,
+            (prompt, history, mode, token, logger) =>
+              runSession(prompt, history, usageTracker, contextWindow, keepAlive, mode, token)(using logger)
+          )
+          try
+            Terminal.run(
+              query => session.accept(query),
+              () => session.commandNames,
+              session.open(),
+              session.close()
+            )
+          finally session.close()(using Logger.ConsoleLogger)
 
 def runSession(
     query: String,
@@ -161,18 +115,6 @@ private def printError(error: String)(using Logger): Unit =
   error.linesIterator
     .map(line => s"${Console.RED}[error] $line${Console.RESET}\n")
     .foreach(summon[Logger].print)
-
-private def printReadyForNextTurn()(using Logger): Unit =
-  summon[Logger].setStatus(None)
-  summon[Logger].print(s"${Console.GREEN}[your turn]${Console.RESET}\n")
-
-private def printThinking(mode: ThinkingInference.ThinkingMode, think: Boolean)(using
-    Logger
-): Unit =
-  val status =
-    if think then s"[thinking enabled, mode=${mode.displayName}]"
-    else s"[thinking disabled, mode=${mode.displayName}]"
-  summon[Logger].setStatus(Some(s"${Console.CYAN}$status${Console.RESET}"))
 
 private def awaitAll[T](f: Future[T]): T =
   Await.result(f, scala.concurrent.duration.Duration.Inf)
