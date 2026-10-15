@@ -4,18 +4,25 @@
 
 ## The actual GitHub demo workspace
 
+**1. Prepare both workspaces**
+
 ```sh
 ./mill run workshop-setup
-. .agent-runtime/demo-workspaces/github.env
 ```
 
-The command copies both tracked starters and builds the skills. It preserves existing edits. In this checkout the GitHub workspace is:
+**2. Load the GitHub workspace into this terminal**
+
+```sh
+source .agent-runtime/demo-workspaces/github.env
+```
+
+Setup preserves edits. It creates this workspace in the current checkout:
 
 ```text
 /Users/jamie/Workspace/capybara-agent/.agent-runtime/demo-workspaces/github
 ```
 
-The snippet edits `src/word-count.mjs`. Each participant sources their own generated environment file; no manual copying is needed.
+Run the steps separately, in order, in the same Bash or Zsh terminal.
 
 {{stack footer}}
 

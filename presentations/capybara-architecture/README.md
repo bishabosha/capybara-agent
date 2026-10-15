@@ -31,13 +31,22 @@ The script pins Scala 3.8.3 for the renderer, independently of Capybara's Scala 
 
 ## Prebuilt presentation
 
-The bundled `index.html`, `deck/` and `static/` form a ready-to-serve native renderer export. Serve this directory directly:
+The tracked `../capybara-architecture.zip` contains the complete ready-to-serve
+export: `index.html`, `deck/` and `static/`. Extract it, open a terminal inside
+the extracted `capybara-architecture` directory, and run:
 
 ```sh
 python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-Open `http://127.0.0.1:8765/deck/`. The exported archive can be served without Scala, Node, npm or a CDN. Rebuilding source snapshots requires the Capybara checkout.
+Open `http://127.0.0.1:8765/deck/`. The extracted export needs no Scala, Node,
+npm or CDN. Rebuilding source snapshots requires the Capybara checkout.
+
+In the source checkout, `index.html`, `deck/`, `static/`, `dist/` and
+`dist-display/` are generated output and are ignored by Git. Existing local
+exports remain usable for preview. Build and serve `dist-display/` using the
+commands above; commit the authored content, public assets, Scala build script
+and shareable ZIP. Hashed asset directories should not be committed separately.
 
 ## Generic coding demo and capture-checking exercises
 

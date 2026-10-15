@@ -32,9 +32,23 @@ importing its API artifact grants no file access.
 For the workshop, run setup from the Capybara checkout and select its prepared
 workspace. Set the remote repository to your own lab repository:
 
+Run each step separately in the same Bash or Zsh terminal.
+
+**1. Prepare the workshop**
+
 ```sh
 ./mill run workshop-setup
-. .agent-runtime/demo-workspaces/github.env
+```
+
+**2. Load the GitHub workspace settings**
+
+```sh
+source .agent-runtime/demo-workspaces/github.env
+```
+
+**3. Configure the remote repository**
+
+```sh
 export CAPYBARA_GITHUB_REPOSITORY=YOUR-ACCOUNT/YOUR-REPOSITORY
 export CAPYBARA_GITHUB_BASE=main
 ```

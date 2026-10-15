@@ -43,6 +43,6 @@ class PresentationSuite extends munit.FunSuite:
     assert(html.contains("source/repl-transcript.html"))
     assert(html.contains("experimental.captureChecking"))
     assert(html.contains("./mill run workshop-setup"))
-    assert(html.contains(".agent-runtime/demo-workspaces/github.env"))
+    assert(html.contains("source .agent-runtime/demo-workspaces/github.env"))
     assert(os.exists(root / "dist-display/deck/speaker-notes.html"))
   }

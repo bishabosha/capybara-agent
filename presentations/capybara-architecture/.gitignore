@@ -2,3 +2,8 @@ dist/
 dist-display/
 .scala-build/
 .bsp/
+
+# Generated preview export; distribute the tracked ZIP instead.
+/index.html
+/deck/
+/static/

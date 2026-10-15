@@ -280,9 +280,23 @@ control effects; `edit(path)(String -> String)` rejects callbacks that retain
 output or another capability. It has no project-specific filenames, external
 runtime, test runner or process sandbox.
 
+Run these steps in the same Bash or Zsh terminal.
+
+**1. Prepare the workshop**
+
 ```sh
 ./mill run workshop-setup
-. .agent-runtime/demo-workspaces/coding.env
+```
+
+**2. Load the workspace settings**
+
+```sh
+source .agent-runtime/demo-workspaces/coding.env
+```
+
+**3. Run the snippet**
+
+```sh
 ./mill run skill-run --skill coding --file examples/snippets/coding.scala
 ```
 

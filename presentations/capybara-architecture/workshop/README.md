@@ -7,8 +7,14 @@ inside the host JVM; it launches no process or OS sandbox.
 
 ## Participant setup
 
+Run the numbered steps separately, in order, in the same Bash or Zsh terminal.
+`source` loads settings into that terminal; it is equivalent to `.` in those
+shells. A trailing `\` continues one command onto the next line.
+
 Clone the Capybara repository and open a terminal at its root. Install a JDK and
-Scala CLI (`scala` on PATH); use the checked-in `./mill` launcher. Then run:
+Scala CLI (`scala` on PATH); use the checked-in `./mill` launcher.
+
+**1. Prepare both workspaces**
 
 ```sh
 ./mill run workshop-setup
@@ -26,10 +32,15 @@ paths printed by that invocation.
 
 ## Coding demo
 
-From the same checkout:
+**2. Load the coding workspace**
 
 ```sh
-. .agent-runtime/demo-workspaces/coding.env
+source .agent-runtime/demo-workspaces/coding.env
+```
+
+**3. Run the coding snippet**
+
+```sh
 ./mill run skill-run --skill coding --file examples/snippets/coding.scala
 ```
 
@@ -112,13 +123,17 @@ and has no token getter.
 
 Setup creates `.agent-runtime/demo-workspaces/github` in each participant's
 checkout. It copies the pristine starter, ready for the snippet to edit
-`src/word-count.mjs`. Select it with:
+`src/word-count.mjs`.
+
+**1. Load the GitHub workspace**
 
 ```sh
-. .agent-runtime/demo-workspaces/github.env
+source .agent-runtime/demo-workspaces/github.env
 ```
 
-The earlier absolute path in the slide is an example of this checkout's location;
+**2. Configure the remote repository and token**
+
+The absolute path in the slide is an example of this checkout's location;
 participants use their own generated environment file. Configure the remote
 GitHub repository and host credential separately.
 
@@ -127,6 +142,8 @@ and draft PR creation. Text edits belong to `coding`. Its host owns the token an
 publish the pristine starter under `workshop/project` to your own lab repository.
 Use only synthetic data. The example expects issue #1. Its public commit method
 requires a `TextFiles` context; manifest `requires` supplies coding automatically.
+
+**3. Run the GitHub snippet in the same terminal**
 
 ```sh
 ./mill run skill-run --skill github \

@@ -48,15 +48,19 @@ code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{
 <li id='L45'><code>    println("Workshop ready. Skill APIs and implementations are built.")</code></li>
 <li id='L46'><code>    for workspace &lt;- workspaces do</code></li>
 <li id='L47'><code>      println(s"${workspace.name}: ${workspace.root} (${if workspace.created then "created" else "kept existing edits"})")</code></li>
-<li id='L48'><code>    println("\nCoding demo:")</code></li>
-<li id='L49'><code>    println(s". ${shellQuote(workspaces.head.environment.toString)}")</code></li>
-<li id='L50'><code>    println("./mill run skill-run --skill coding --file examples/snippets/coding.scala")</code></li>
-<li id='L51'><code>    println("\nGitHub demo:")</code></li>
-<li id='L52'><code>    println(s". ${shellQuote(workspaces(1).environment.toString)}")</code></li>
-<li id='L53'><code>    println("# Set CAPYBARA_GITHUB_REPOSITORY and supply CAPYBARA_GITHUB_TOKEN in your shell.")</code></li>
-<li id='L54'><code>    println("./mill run skill-run --skill github --file examples/snippets/github-lab.scala")</code></li>
-<li id='L55'><code>    println("\nSetup creates local files only. It does not contact GitHub or store credentials.")</code></li>
-<li id='L56'><code></code></li>
-<li id='L57'><code>  private def load(path: String): Skill = Skills.loadFrom(os.pwd / os.RelPath(path)) match</code></li>
-<li id='L58'><code>    case Result.Ok(value) =&gt; value</code></li>
-<li id='L59'><code>    case Result.Err(error) =&gt; throw IllegalStateException(error)</code></li></ol></html>
+<li id='L48'><code>    println("\nRun each numbered step in the same Bash or Zsh terminal.")</code></li>
+<li id='L49'><code>    println("\nCoding demo — step 1: load workspace settings")</code></li>
+<li id='L50'><code>    println(s"source ${shellQuote(workspaces.head.environment.toString)}")</code></li>
+<li id='L51'><code>    println("\nCoding demo — step 2: run the snippet")</code></li>
+<li id='L52'><code>    println("./mill run skill-run --skill coding --file examples/snippets/coding.scala")</code></li>
+<li id='L53'><code>    println("\nGitHub demo — step 1: load workspace settings")</code></li>
+<li id='L54'><code>    println(s"source ${shellQuote(workspaces(1).environment.toString)}")</code></li>
+<li id='L55'><code>    println("\nGitHub demo — step 2: configure the remote repository and token")</code></li>
+<li id='L56'><code>    println("# Set CAPYBARA_GITHUB_REPOSITORY and supply CAPYBARA_GITHUB_TOKEN in your shell.")</code></li>
+<li id='L57'><code>    println("\nGitHub demo — step 3: run the snippet")</code></li>
+<li id='L58'><code>    println("./mill run skill-run --skill github --file examples/snippets/github-lab.scala")</code></li>
+<li id='L59'><code>    println("\nSetup creates local files only. It does not contact GitHub or store credentials.")</code></li>
+<li id='L60'><code></code></li>
+<li id='L61'><code>  private def load(path: String): Skill = Skills.loadFrom(os.pwd / os.RelPath(path)) match</code></li>
+<li id='L62'><code>    case Result.Ok(value) =&gt; value</code></li>
+<li id='L63'><code>    case Result.Err(error) =&gt; throw IllegalStateException(error)</code></li></ol></html>

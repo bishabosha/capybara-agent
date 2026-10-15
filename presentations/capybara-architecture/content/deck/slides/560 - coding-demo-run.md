@@ -4,14 +4,26 @@
 
 ## Coding demo: ordinary skill-run with a snippet
 
+**1. Prepare the workspaces**
+
 ```sh
 ./mill run workshop-setup
-. .agent-runtime/demo-workspaces/coding.env
+```
+
+**2. Load the coding workspace**
+
+```sh
+source .agent-runtime/demo-workspaces/coding.env
+```
+
+**3. Run the snippet**
+
+```sh
 ./mill run skill-run --skill coding \
   --file examples/snippets/coding.scala
 ```
 
-Run from the Capybara checkout. The workspace begins with `Greeting.scala` and `README.md`. The snippet lists, reads, edits and creates text files.
+Use the same terminal. The `\` continues one command onto the next line.
 
 {{stack footer}}
 
@@ -21,4 +33,4 @@ Source: [setup command](assets/source/workshop-setup.html), [snippet](assets/sou
 
 ## Speaker notes
 
-This uses the ordinary skill-run CLI; no custom demo API is needed. CodingDemoSuite exercises the same CLI dispatch and checked-in snippet with a temporary host-configured workspace.
+Run these three commands in order in the same Bash or Zsh terminal. source loads CAPYBARA_CODING_ROOT into that terminal, so the following skill-run inherits it. In Bash and Zsh, source file is equivalent to . file; POSIX sh uses the dot form. The backslash in step 3 is a line continuation, so those two displayed lines are one command. This remains an ordinary skill-run invocation with the checked-in snippet.
