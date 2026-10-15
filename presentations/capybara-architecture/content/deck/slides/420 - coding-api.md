@@ -5,6 +5,7 @@
 ## Generic text tools form one small capability
 
 ```scala
+// skills/coding/Interface.scala
 trait TextFiles extends caps.SharedCapability {
   def list(path: String): Seq[String]
   def read(path: String): String

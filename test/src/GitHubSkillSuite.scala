@@ -23,6 +23,9 @@ class GitHubSkillSuite extends munit.FunSuite:
     val pulls = scala.collection.mutable.ArrayBuffer.empty[ujson.Value]
     var secretIssue = false
     var successChecks = false
+    var rejectRefCreation = false
+    var baseConflict = false
+    var rejectPullCreation = false
     val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
     server.createContext("/repos/example/lab", exchange => {
       try
@@ -38,12 +41,13 @@ class GitHubSkillSuite extends munit.FunSuite:
           case ("GET", "/issues") => (200, ujson.Arr(issue))
           case ("GET", "/issues/1") => (200, issue)
           case ("GET", p) if p.startsWith("/git/ref/heads/") =>
-            refs.get(p.stripPrefix("/git/ref/heads/")) match
+            (if baseConflict && p == "/git/ref/heads/main" then None else refs.get(p.stripPrefix("/git/ref/heads/"))) match
               case Some(sha) => (200, ujson.Obj("object" -> ujson.Obj("sha" -> sha)))
-              case None => (404, ujson.Obj("message" -> token))
+              case None => (if baseConflict && p == "/git/ref/heads/main" then 409 else 404,
+                ujson.Obj("message" -> token))
           case ("POST", "/git/refs") =>
             val name = body("ref").str.stripPrefix("refs/heads/")
-            if refs.contains(name) then (422, ujson.Obj("message" -> token))
+            if rejectRefCreation || refs.contains(name) then (422, ujson.Obj("message" -> token))
             else
               refs(name) = body("sha").str
               (201, ujson.Obj("object" -> ujson.Obj("sha" -> body("sha"))))
@@ -56,6 +60,7 @@ class GitHubSkillSuite extends munit.FunSuite:
             refs(p.stripPrefix("/git/refs/heads/")) = body("sha").str
             (200, ujson.Obj("object" -> ujson.Obj("sha" -> body("sha"))))
           case ("GET", "/pulls") => (200, ujson.Arr.from(pulls))
+          case ("POST", "/pulls") if rejectPullCreation => (422, ujson.Obj("message" -> token))
           case ("POST", "/pulls") =>
             assert(body("draft").bool)
             val item = ujson.Obj("number" -> 2, "draft" -> true,
@@ -131,6 +136,41 @@ class GitHubSkillSuite extends munit.FunSuite:
       val checked = run(skills, "puts(github.checks(github.branch(\"capybara/issue-1\")))")
       assert(!checked.failed, checked.stderr)
       assertEquals(ujson.read(checked.stdout)("special.success")("status").str, "passed")
+    }
+  }
+
+  test("ordinary demo resumes an interrupted run only while the topic still equals the base") {
+    withSkills { (skills, root, remote) =>
+      assert(!run(skills, "github.createBranch(\"capybara/issue-1\")").failed)
+      val output = SkillRunFixture.run(skills, os.pwd / "examples/snippets/github-lab.scala")
+      assertEquals(output.stderr, "")
+      assert(os.read(root / "src/word-count.mjs").contains("clean.split"))
+      assertEquals(remote.refs("main"), initial)
+      assertEquals(remote.refs("capybara/issue-1"), committed)
+      assertEquals(remote.pulls.size, 1)
+      val writes = remote.requests.count(_._1 != "GET")
+      val advanced = run(skills, "github.createBranch(\"capybara/issue-1\")")
+      assert(advanced.failed && advanced.stderr.contains("BRANCH_ALREADY_EXISTS"), advanced.stderr)
+      assertEquals(remote.refs("capybara/issue-1"), committed)
+      assertEquals(remote.requests.count(_._1 != "GET"), writes + 1) // one rejected create, no ref update
+    }
+  }
+
+  test("HTTP failures identify the operation without returning GitHub error bodies") {
+    withSkills { (skills, _, remote) =>
+      remote.baseConflict = true
+      val base = run(skills, "github.createBranch(\"capybara/issue-1\")")
+      assert(base.failed && base.stderr.contains("READ_BASE_BRANCH: CONFLICT (HTTP 409)"), base.stderr)
+      remote.baseConflict = false
+      remote.rejectRefCreation = true
+      val invalid = run(skills, "github.createBranch(\"capybara/issue-1\")")
+      assert(invalid.failed && invalid.stderr.contains("CREATE_BRANCH: VALIDATION_FAILED (HTTP 422)"), invalid.stderr)
+      assert(!remote.refs.contains("capybara/issue-1"))
+      remote.rejectRefCreation = false
+      assert(!run(skills, "github.createBranch(\"capybara/issue-1\")").failed)
+      remote.rejectPullCreation = true
+      val pull = run(skills, "github.createPullRequest(github.branch(\"capybara/issue-1\"), \"Fix\", \"Fixes #1\")")
+      assert(pull.failed && pull.stderr.contains("CREATE_PULL_REQUEST: VALIDATION_FAILED (HTTP 422)"), pull.stderr)
     }
   }
 

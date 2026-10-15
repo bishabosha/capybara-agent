@@ -139,6 +139,8 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
   import Wire.*
   import Wire.Value.*
   private class PolicyError(code: String) extends IllegalStateException(code)
+  private class HttpError(val status: Int, operation: String, reason: String)
+      extends PolicyError(s"$operation: $reason (HTTP $status)")
   private def requirePolicy(ok: Boolean, code: String): Unit = if !ok then throw PolicyError(code)
   requirePolicy(repository.matches("[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"), "INVALID_REPOSITORY")
   requirePolicy(base.matches("[A-Za-z0-9][A-Za-z0-9_./-]*") && !base.contains(".."), "INVALID_BRANCH")
@@ -155,7 +157,8 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
     def connectFailed(uri: URI, address: SocketAddress, error: java.io.IOException): Unit = ()
   private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20))
     .followRedirects(HttpClient.Redirect.NEVER).proxy(noProxy).build()
-  private def request(method: String, suffix: String, body: Value = Null): Value =
+  private def request(method: String, suffix: String, body: Value = Null,
+                      operation: String = "GITHUB_REQUEST"): Value =
     val payload = if body == Null then "" else publicText(render(body), 2097152)
     val publisher = if body == Null then HttpRequest.BodyPublishers.noBody()
       else HttpRequest.BodyPublishers.ofString(payload, UTF_8)
@@ -168,12 +171,17 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
       val response = client.send(req, HttpResponse.BodyHandlers.ofInputStream())
       val input = response.body()
       try
-        requirePolicy(Set(200, 201)(response.statusCode()), response.statusCode() match
-          case 401 => "AUTH_FAILED"
-          case 404 => "NOT_FOUND"
-          case 409 | 422 => "CONFLICT"
-          case 429 => "RATE_LIMITED"
-          case _ => "GITHUB_REQUEST_REJECTED")
+        if !Set(200, 201)(response.statusCode()) then
+          val reason = response.statusCode() match
+            case 401 => "AUTH_FAILED"
+            case 403 => "FORBIDDEN"
+            case 404 => "NOT_FOUND"
+            case 409 => "CONFLICT"
+            case 422 => "VALIDATION_FAILED"
+            case 429 => "RATE_LIMITED"
+            case _ => "GITHUB_REQUEST_REJECTED"
+          // Never include GitHub's error body, headers or original exception.
+          throw HttpError(response.statusCode(), operation, reason)
         val bytes = input.readNBytes(8388609)
         requirePolicy(bytes.length <= 8388608, "INVALID_RESPONSE")
         parse(new String(bytes, UTF_8))
@@ -189,13 +197,14 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
     requirePolicy(name.startsWith("capybara/") && name != base &&
       name.matches("[A-Za-z0-9][A-Za-z0-9_/-]*") && !name.contains("//"), "INVALID_BRANCH")
     name
-  private def head(name: String): String = validSha(request("GET", "/git/ref/heads/" + name)("object")("sha").text)
+  private def head(name: String, operation: String = "READ_BRANCH"): String =
+    validSha(request("GET", "/git/ref/heads/" + name, operation = operation)("object")("sha").text)
   private def current(branch: githubskill.Branch): Unit =
     requirePolicy(head(topic(branch.name)) == validSha(branch.commit), "BRANCH_CHANGED")
 
   def lookupIssue(number: Int): githubskill.Issue =
     requirePolicy(number > 0, "INVALID_REQUEST")
-    val item = request("GET", s"/issues/$number")
+    val item = request("GET", s"/issues/$number", operation = "LOOKUP_ISSUE")
     requirePolicy(item("number").integer == number && item.get("pull_request").isEmpty, "INVALID_RESPONSE")
     val body = item.get("body").filter(_ != Null).map(_.text).getOrElse("")
     githubskill.Issue(number, publicText(item("title").text, 4096), publicText(body),
@@ -203,7 +212,7 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
 
   def listIssues(page: Int): Seq[githubskill.IssueSummary] =
     requirePolicy(page > 0 && page <= 1000, "INVALID_REQUEST")
-    val items = request("GET", s"/issues?state=open&per_page=25&page=$page").items
+    val items = request("GET", s"/issues?state=open&per_page=25&page=$page", operation = "LIST_ISSUES").items
     requirePolicy(items.size <= 25, "INVALID_RESPONSE")
     items.filter(_.get("pull_request").isEmpty).map { item =>
       val n = item("number").integer
@@ -215,8 +224,20 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
 
   def createBranch(name: String): githubskill.Branch =
     topic(name)
-    val commit = head(base)
-    val _ = request("POST", "/git/refs", obj("ref" -> Str("refs/heads/" + name), "sha" -> Str(commit)))
+    val commit = head(base, "READ_BASE_BRANCH")
+    try
+      val _ = request("POST", "/git/refs", obj("ref" -> Str("refs/heads/" + name), "sha" -> Str(commit)),
+        operation = "CREATE_BRANCH")
+    catch
+      case rejected: HttpError if Set(409, 422)(rejected.status) =>
+        // An interrupted demo may have created the ref before editing any files.
+        // Reuse it only when read-back proves its head is exactly the current base.
+        val existing = try Some(head(name)) catch { case _: HttpError => None }
+        existing match
+          case Some(current) if current == commit => ()
+          case Some(_) => throw PolicyError("BRANCH_ALREADY_EXISTS: the topic has a different head from the base. " +
+            "Choose a fresh topic name, or explicitly continue it with branch(name).")
+          case None => throw rejected
     githubskill.Branch(name, commit)
 
   def commit(branch: githubskill.Branch, message: String, paths: Seq[String])
@@ -232,11 +253,11 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
     val patch = Arr(changes.toVector)
     publicText(render(patch), 2097152)
     current(branch)
-    val baseTree = validSha(request("GET", "/git/commits/" + branch.commit)("tree")("sha").text)
-    val tree = validSha(request("POST", "/git/trees", obj("base_tree" -> Str(baseTree), "tree" -> patch))("sha").text)
+    val baseTree = validSha(request("GET", "/git/commits/" + branch.commit, operation = "READ_COMMIT")("tree")("sha").text)
+    val tree = validSha(request("POST", "/git/trees", obj("base_tree" -> Str(baseTree), "tree" -> patch), operation = "CREATE_TREE")("sha").text)
     val commit = validSha(request("POST", "/git/commits", obj("message" -> Str(message),
-      "tree" -> Str(tree), "parents" -> Arr(Vector(Str(branch.commit)))))("sha").text)
-    val _ = request("PATCH", "/git/refs/heads/" + branch.name, obj("sha" -> Str(commit), "force" -> Bool(false)))
+      "tree" -> Str(tree), "parents" -> Arr(Vector(Str(branch.commit)))), operation = "CREATE_COMMIT")("sha").text)
+    val _ = request("PATCH", "/git/refs/heads/" + branch.name, obj("sha" -> Str(commit), "force" -> Bool(false)), operation = "UPDATE_BRANCH")
     githubskill.Branch(branch.name, commit)
 
   def createPullRequest(branch: githubskill.Branch, title: String, body: String): githubskill.PullRequest =
@@ -245,22 +266,22 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
     requirePolicy(title.trim.nonEmpty, "INVALID_REQUEST")
     current(branch)
     val owner = repository.takeWhile(_ != '/')
-    val existing = request("GET", s"/pulls?state=open&head=$owner:${branch.name}&base=$base&per_page=100").items
+    val existing = request("GET", s"/pulls?state=open&head=$owner:${branch.name}&base=$base&per_page=100", operation = "LIST_PULL_REQUESTS").items
     val matching = existing.filter(item => item("head")("ref").text == branch.name &&
       item("head")("sha").text == branch.commit && item("base")("ref").text == base &&
       item("head")("repo")("full_name").text.equalsIgnoreCase(repository))
     requirePolicy(matching.size <= 1, "INVALID_RESPONSE")
     val item = matching.headOption.getOrElse(request("POST", "/pulls", obj("title" -> Str(title),
       "body" -> Str(body), "head" -> Str(branch.name), "base" -> Str(base),
-      "draft" -> Bool(true), "maintainer_can_modify" -> Bool(false))))
+      "draft" -> Bool(true), "maintainer_can_modify" -> Bool(false)), operation = "CREATE_PULL_REQUEST"))
     val number = item("number").integer
     requirePolicy(number > 0, "INVALID_RESPONSE")
     githubskill.PullRequest(number, s"https://github.com/$repository/pull/$number")
 
   def checks(branch: githubskill.Branch): githubskill.CheckSummary =
     current(branch)
-    val statuses = request("GET", s"/commits/${branch.commit}/status?per_page=100")
-    val checks = request("GET", s"/commits/${branch.commit}/check-runs?per_page=100")
+    val statuses = request("GET", s"/commits/${branch.commit}/status?per_page=100", operation = "READ_COMMIT_STATUS")
+    val checks = request("GET", s"/commits/${branch.commit}/check-runs?per_page=100", operation = "READ_CHECK_RUNS")
     val runs = checks("check_runs").items
     requirePolicy(checks("total_count").integer == runs.size && statuses("total_count").integer <= 100, "INVALID_RESPONSE")
     val count = statuses("total_count").integer

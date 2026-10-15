@@ -141,7 +141,13 @@ and reflective field access in the regression cases. Trusted factories are
 marked `@caps.rejectSafe`.
 
 `createBranch` accepts only a `capybara/` topic name and never overwrites an
-existing branch. `commit` checks the exact expected head, uploads selected local
+existing branch. If a rejected create is followed by a read showing that the
+existing topic still has exactly the base branch's head, it returns that topic.
+This lets a demo recover after stopping between branch creation and the edit.
+An existing topic with a different head returns `BRANCH_ALREADY_EXISTS`; choose
+a new name or explicitly continue with `branch(name)`.
+
+`commit` checks the exact expected head, uploads selected local
 text and advances the ref without force. A stale `Branch` returns
 `BRANCH_CHANGED`; inspect it with `branch(name)` before deciding what to do.
 PR creation checks the exact head, creates a draft and reuses an existing exact
@@ -158,3 +164,19 @@ Run `GitHubSkillSuite` and `SkillCompositionSuite` through Metals MCP. They test
 real HTTP serialization, local API publication, safe API delegation, independent
 editing/GitHub operations, cross-skill capture failures and credential rejection.
 No live GitHub repository is mutated by these tests.
+
+## Troubleshooting the demo
+
+If issue #1 prints but the edited source does not, the failure is during branch
+creation, before any local edit or commit. The snippet uses `capybara/issue-1`.
+It now reuses that branch only if it is still at the current base head. It never
+resets or force-updates an existing branch.
+
+HTTP failures include the operation and status, for example
+`READ_BASE_BRANCH: CONFLICT (HTTP 409)` or
+`CREATE_PULL_REQUEST: VALIDATION_FAILED (HTTP 422)`. Response bodies, authorization
+headers and original transport exceptions remain private.
+
+After a completed demo, choose a fresh topic name for a separate run. To continue
+that same branch deliberately, replace `createBranch(name)` with `branch(name)`
+in your snippet. An empty remote repository first needs an initial base commit.

@@ -13,7 +13,7 @@ source .agent-runtime/demo-workspaces/github.env
 **2. Configure your lab repository (issue #1)**
 
 ```sh
-export CAPYBARA_GITHUB_REPOSITORY=YOUR-ACCOUNT/YOUR-LAB
+export CAPYBARA_GITHUB_REPOSITORY=bishabosha/capybara-agent-github-sandbox
 export CAPYBARA_GITHUB_BASE=main
 ```
 

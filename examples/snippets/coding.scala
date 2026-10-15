@@ -1,6 +1,6 @@
 puts(coding.list("."))
 puts(coding.read("Greeting.scala"))
-coding.edit("Greeting.scala") { text =>
+coding.edit("../github/README.md") { text =>
   text.replace("hello, world", "hello, capybara")
 }
 coding.write("notes.txt", "Edited through the coding capability.\n")

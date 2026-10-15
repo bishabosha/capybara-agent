@@ -15,6 +15,7 @@ trait GitHub extends caps.SharedCapability {
   def listIssues(page: Int): Seq[IssueSummary]
   def lookupIssue(number: Int): Issue
   def branch(name: String): Branch
+  /** Create from the base, or reuse an existing ref only if its head still equals the base. */
   def createBranch(name: String): Branch
   /** Requires the caller's file authority to read selected paths before committing and pushing. */
   def commit(branch: Branch, message: String, paths: Seq[String])(using files: editing.TextFiles): Branch
