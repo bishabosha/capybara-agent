@@ -18,7 +18,7 @@ Interface `//> using` directives remain in that file. No implementation source j
 
 {{stack footer}}
 
-Source: [interface package command](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L468-L489)
+Source: [interface package command](assets/source/repl-exec.html)
 
 {{end-stack}}
 

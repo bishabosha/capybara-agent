@@ -25,4 +25,4 @@ Source: [actual coding interface](assets/source/coding-interface.html), [actual 
 
 ## Speaker notes
 
-The runtime loader discovers directories at startup. Restart the agent after adding a new skill. The coding capability and helper are implemented in this working tree. Its helper remains trusted application code, not repository-supplied Python.
+The runtime loader discovers directories at startup. Restart the agent after adding a new skill. The coding implementation uses the JDK directly. Dependencies import safe skill API types with using dep. Manifest requires separately requests runtime contexts; public method signatures declare their use.

@@ -20,7 +20,7 @@ The agent decodes separate channels into `{"success":true,"stdout":[6],"stderr":
 
 {{stack footer}}
 
-Source: [JSON stream writes](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/builtin-skills/capybara-builtins/scripts/Implementation.scala#L118-L133), [decodeOutput](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L355-L373)
+Source: [JSON stream writes](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/builtin-skills/capybara-builtins/scripts/Implementation.scala#L118-L133), [decodeOutput](assets/source/repl-exec.html)
 
 {{end-stack}}
 

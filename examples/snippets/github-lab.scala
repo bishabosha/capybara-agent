@@ -1,17 +1,14 @@
-// Requires the host-approved lab profile. This performs remote writes with real production wiring.
+// Select universes ["coding", "github"]. This performs real writes with production wiring.
 puts(github.lookupIssue(1))
-puts(github.start(1))
-puts(github.test())
-github.transform("src/word-count.mjs") { source =>
+val topic = github.createBranch("capybara/issue-1")
+coding.edit("src/word-count.mjs") { source =>
   source.replace("return text.split(' ').length;",
     """const clean = text.trim();
   return clean === '' ? 0 : clean.split(/\s+/u).length;""")
 }
-puts(github.test())
-puts(github.diff())
-puts(github.push("Handle empty input and mixed whitespace"))
-puts(github.createPullRequest(
-  "Handle empty input and mixed whitespace",
-  "Fixes #1\n\nThe sandboxed baseline failed; all three tests passed after the fix."
-))
-puts(github.checks())
+puts(coding.read("src/word-count.mjs"))
+val pushed = github.commit(topic, "Handle empty input and mixed whitespace",
+  Seq("src/word-count.mjs"))
+puts(github.createPullRequest(pushed,
+  "Handle empty input and mixed whitespace", "Fixes #1"))
+puts(github.checks(pushed))

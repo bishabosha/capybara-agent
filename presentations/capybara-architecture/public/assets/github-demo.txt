@@ -1,0 +1,4 @@
+{"special.success": {"number": 1, "title": "Fix whitespace λ", "body": "Handle empty input, repeated spaces and \\t.", "url": "https://github.com/example/lab/issues/1"}}
+{"special.success": "export function countWords(text) {\n  const clean = text.trim();\n  return clean === '' ? 0 : clean.split(/\\s+/u).length;\n}\n"}
+{"special.success": {"number": 2, "url": "https://github.com/example/lab/pull/2"}}
+{"special.success": {"commit": "3333333333333333333333333333333333333333", "status": "pending"}}

@@ -16,7 +16,7 @@ A green IDE compilation is useful, but the next check is a snippet through `Repl
 
 {{stack footer}}
 
-Source: [IDE inputs](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/SkillIde.scala#L28-L43), [runtime safe check](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L281-L293)
+Source: [IDE inputs](assets/source/skill-ide.html), [runtime safe check](assets/source/repl-exec.html)
 
 {{end-stack}}
 

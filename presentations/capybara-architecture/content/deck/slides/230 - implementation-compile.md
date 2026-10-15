@@ -18,7 +18,7 @@ This command has **no `experimental.safe` flag**. Implementation code and capabi
 
 {{stack footer}}
 
-Source: [directive processing and packaging](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L490-L517)
+Source: [directive processing and packaging](assets/source/repl-exec.html)
 
 {{end-stack}}
 

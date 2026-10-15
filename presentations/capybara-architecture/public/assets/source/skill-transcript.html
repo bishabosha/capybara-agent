@@ -10,44 +10,59 @@ code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{
 <li id='L7'><code>  private val normalizedId = "00000000_0000_0000_0000_000000000001"</code></li>
 <li id='L8'><code></code></li>
 <li id='L9'><code>  def render(builtins: Skill, skill: Skill, code: String, root: os.Path = os.pwd): String =</code></li>
-<li id='L10'><code>    def load(selected: Skill): Seq[String] =</code></li>
-<li id='L11'><code>      if !selected.requiresRuntimeClasspath then Nil</code></li>
-<li id='L12'><code>      else</code></li>
-<li id='L13'><code>        val folder = root / ".agent-runtime" / "interface" / selected.universe</code></li>
-<li id='L14'><code>        Seq(s":jar ${folder / "sigs.jar"}", s":jar ${folder / "impl.jar"}") ++ selected.predef.toSeq</code></li>
-<li id='L15'><code>    val bindings = SkillScaffold.bindings(builtins, skill)</code></li>
-<li id='L16'><code>    val method = s"agentCode_$normalizedId"</code></li>
-<li id='L17'><code>    val entry = s"harnessEntry_$normalizedId"</code></li>
-<li id='L18'><code>    val commands = load(builtins) ++ (</code></li>
-<li id='L19'><code>      if skill.requiresRuntimeClasspath &amp;&amp; skill.universe != builtins.universe then load(skill) else Nil</code></li>
-<li id='L20'><code>    ) ++ Seq(</code></li>
-<li id='L21'><code>      "// HOST: clear the language-feature setting before changing mode.",</code></li>
-<li id='L22'><code>      ":settings -language:experimental.safe",</code></li>
-<li id='L23'><code>      SkillScaffold.definition(method, bindings, code),</code></li>
-<li id='L24'><code>      "// HOST: clear the language-feature setting again.",</code></li>
-<li id='L25'><code>      ":settings -language:experimental.captureChecking",</code></li>
-<li id='L26'><code>      SkillScaffold.entryPoint(entry, method, bindings)</code></li>
-<li id='L27'><code>    )</code></li>
-<li id='L28'><code>    s"""// Generated command transcript for universe '${skill.universe}'.</code></li>
-<li id='L29'><code>       |// The per-call UUID is normalized; all methods use the actual scaffold templates.</code></li>
-<li id='L30'><code>       |// Initial ReplDriver language: experimental.captureChecking.</code></li>
-<li id='L31'><code>       |// Cache packaging, if needed, happens before these REPL commands.</code></li>
-<li id='L32'><code>       |</code></li>
-<li id='L33'><code>       |${commands.mkString("\n\n")}</code></li>
-<li id='L34'><code>       |// HOST invocation, not a submitted REPL command:</code></li>
-<li id='L35'><code>       |// invokeEntryPoint("$entry", stdout.stream, stderr.stream)</code></li>
-<li id='L36'><code>       |// This reflects the compiled entry method with two host-owned PrintStreams.</code></li>
-<li id='L37'><code>       |// Finally: resetToInitial(), restore initialState, and clear diagnostics.</code></li>
-<li id='L38'><code>       |""".stripMargin</code></li>
-<li id='L39'><code></code></li>
-<li id='L40'><code>  @mainargs.main(doc = "Print generated REPL commands for one tool call; do not execute it.")</code></li>
-<li id='L41'><code>  def main(</code></li>
-<li id='L42'><code>      @mainargs.arg(doc = "Skill directory, or basic") skill: String,</code></li>
-<li id='L43'><code>      @mainargs.arg(doc = "Snippet file") file: String</code></li>
-<li id='L44'><code>  ): Unit =</code></li>
-<li id='L45'><code>    def load(path: String): Skill = Skills.loadFrom(os.Path(path, os.pwd)) match</code></li>
-<li id='L46'><code>      case Result.Ok(value) =&gt; value</code></li>
-<li id='L47'><code>      case Result.Err(error) =&gt; throw IllegalArgumentException(error)</code></li>
-<li id='L48'><code>    val builtins = load("builtin-skills/capybara-builtins")</code></li>
-<li id='L49'><code>    val selected = if skill == "basic" then Skills.Basic else load(skill)</code></li>
-<li id='L50'><code>    scala.Console.print(render(builtins, selected, os.read(os.Path(file, os.pwd))))</code></li></ol></html>
+<li id='L10'><code>    renderSkills(builtins, Seq(skill), code, root)</code></li>
+<li id='L11'><code></code></li>
+<li id='L12'><code>  def renderSkills(builtins: Skill, selected: Seq[Skill], code: String, root: os.Path = os.pwd): String =</code></li>
+<li id='L13'><code>    val skills = Skills.resolve(selected.map(_.universe),</code></li>
+<li id='L14'><code>      selected ++ Skills.loadAll(root / "skills") :+ Skills.Basic, builtins) match</code></li>
+<li id='L15'><code>      case Result.Ok(value) =&gt; value</code></li>
+<li id='L16'><code>      case Result.Err(error) =&gt; throw IllegalArgumentException(error)</code></li>
+<li id='L17'><code>    def load(selected: Skill): Seq[String] =</code></li>
+<li id='L18'><code>      if !selected.requiresRuntimeClasspath then Nil</code></li>
+<li id='L19'><code>      else</code></li>
+<li id='L20'><code>        val folder = root / ".agent-runtime" / "interface" / selected.universe</code></li>
+<li id='L21'><code>        Seq(s":jar ${folder / "sigs.jar"}", s":jar ${folder / "impl.jar"}") ++ selected.predef.toSeq</code></li>
+<li id='L22'><code>    val bindings = SkillScaffold.bindings(builtins, skills)</code></li>
+<li id='L23'><code>    val method = s"agentCode_$normalizedId"</code></li>
+<li id='L24'><code>    val entry = s"harnessEntry_$normalizedId"</code></li>
+<li id='L25'><code>    val apis = Skills.resolve(selected.map(_.universe),</code></li>
+<li id='L26'><code>      selected ++ Skills.loadAll(root / "skills") :+ Skills.Basic, builtins, includeApis = true) match</code></li>
+<li id='L27'><code>      case Result.Ok(value) =&gt; value</code></li>
+<li id='L28'><code>      case Result.Err(error) =&gt; throw IllegalArgumentException(error)</code></li>
+<li id='L29'><code>    val apiCommands = apis.map(s =&gt; s":jar ${root / ".agent-runtime/interface" / s.universe / "sigs.jar"}")</code></li>
+<li id='L30'><code>    val implementationCommands = skills.flatMap(s =&gt;</code></li>
+<li id='L31'><code>      Seq(s":jar ${root / ".agent-runtime/interface" / s.universe / "impl.jar"}") ++ s.predef.toSeq)</code></li>
+<li id='L32'><code>    val commands = load(builtins) ++ apiCommands ++ implementationCommands ++ Seq(</code></li>
+<li id='L33'><code>      "// HOST: clear the language-feature setting before changing mode.",</code></li>
+<li id='L34'><code>      ":settings -language:experimental.safe",</code></li>
+<li id='L35'><code>      SkillScaffold.definition(method, bindings, code),</code></li>
+<li id='L36'><code>      "// HOST: clear the language-feature setting again.",</code></li>
+<li id='L37'><code>      ":settings -language:experimental.captureChecking",</code></li>
+<li id='L38'><code>      SkillScaffold.entryPoint(entry, method, bindings)</code></li>
+<li id='L39'><code>    )</code></li>
+<li id='L40'><code>    s"""// Generated command transcript for skills '${selected.map(_.universe).mkString(",")}'.</code></li>
+<li id='L41'><code>       |// The per-call UUID is normalized; all methods use the actual scaffold templates.</code></li>
+<li id='L42'><code>       |// Initial ReplDriver language: experimental.captureChecking.</code></li>
+<li id='L43'><code>       |// Cache packaging, if needed, happens before these REPL commands.</code></li>
+<li id='L44'><code>       |</code></li>
+<li id='L45'><code>       |${commands.mkString("\n\n")}</code></li>
+<li id='L46'><code>       |// HOST invocation, not a submitted REPL command:</code></li>
+<li id='L47'><code>       |// invokeEntryPoint("$entry", stdout.stream, stderr.stream)</code></li>
+<li id='L48'><code>       |// This reflects the compiled entry method with two host-owned PrintStreams.</code></li>
+<li id='L49'><code>       |// Finally: resetToInitial(), restore initialState, and clear diagnostics.</code></li>
+<li id='L50'><code>       |""".stripMargin</code></li>
+<li id='L51'><code></code></li>
+<li id='L52'><code>  @mainargs.main(doc = "Print generated REPL commands for one tool call; do not execute it.")</code></li>
+<li id='L53'><code>  def main(</code></li>
+<li id='L54'><code>      @mainargs.arg(doc = "Skill directory, or basic") skill: String,</code></li>
+<li id='L55'><code>      @mainargs.arg(doc = "Snippet file") file: String</code></li>
+<li id='L56'><code>  ): Unit =</code></li>
+<li id='L57'><code>    def load(path: String): Skill = Skills.loadFrom(os.Path(path, os.pwd)) match</code></li>
+<li id='L58'><code>      case Result.Ok(value) =&gt; value</code></li>
+<li id='L59'><code>      case Result.Err(error) =&gt; throw IllegalArgumentException(error)</code></li>
+<li id='L60'><code>    val builtins = load("builtin-skills/capybara-builtins")</code></li>
+<li id='L61'><code>    val selected = skill.split(",").toSeq.map(_.trim).map { name =&gt;</code></li>
+<li id='L62'><code>      if name == "basic" then Skills.Basic</code></li>
+<li id='L63'><code>      else load(if name.contains("/") then name else s"skills/$name")</code></li>
+<li id='L64'><code>    }</code></li>
+<li id='L65'><code>    scala.Console.print(renderSkills(builtins, selected, os.read(os.Path(file, os.pwd))))</code></li></ol></html>

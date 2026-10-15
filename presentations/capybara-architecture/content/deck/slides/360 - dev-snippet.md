@@ -22,7 +22,7 @@ The agent uses the same capability wiring and execution path.
 
 {{stack footer}}
 
-Source: [SkillRunner.run](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/SkillRunner.scala#L7-L37)
+Source: [SkillRunner.run](assets/source/skill-runner.html)
 
 {{end-stack}}
 

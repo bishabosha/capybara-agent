@@ -19,7 +19,7 @@ The guard rejects a 17th request in the same turn.
 
 {{stack footer}}
 
-Source: [continueSession](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/scalaAgentDemo.scala#L121-L152), [hasToolCalls](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L343-L353)
+Source: [continueSession](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/scalaAgentDemo.scala#L121-L152), [hasToolCalls](assets/source/scala-agent.html)
 
 {{end-stack}}
 

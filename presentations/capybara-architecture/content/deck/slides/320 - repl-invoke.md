@@ -20,7 +20,7 @@ The first JSON line comes from `puts`. The second is the decoded tool result. Fi
 
 {{stack footer}}
 
-Source: [reflective invocation](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L113-L126), [reset and decode](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L303-L310)
+Source: [reflective invocation](assets/source/repl-exec.html), [reset and decode](assets/source/repl-exec.html)
 
 {{end-stack}}
 

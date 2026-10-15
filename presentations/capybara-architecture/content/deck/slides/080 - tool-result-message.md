@@ -22,7 +22,7 @@ Result `content` is serialized data. `tool_call_id` pairs it with the request. M
 
 {{stack footer}}
 
-Source: [tool-result message](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/OllamaClient.scala#L264-L273), [append assistant then results](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L371-L390), [Function calling guide](https://developers.openai.com/api/docs/guides/function-calling)
+Source: [tool-result message](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/OllamaClient.scala#L264-L273), [append assistant then results](assets/source/scala-agent.html), [Function calling guide](https://developers.openai.com/api/docs/guides/function-calling)
 
 {{end-stack}}
 

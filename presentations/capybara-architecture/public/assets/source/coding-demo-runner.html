@@ -1,0 +1,45 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>src/CodingDemo.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>src/CodingDemo.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import steps.result.Result</code></li>
+<li id='L4'><code></code></li>
+<li id='L5'><code>/** Generic text-file editing through the actual safe REPL and manifest wiring. */</code></li>
+<li id='L6'><code>object CodingDemo:</code></li>
+<li id='L7'><code>  private def loaded(path: String): Skill = Skills.loadFrom(os.pwd / os.RelPath(path)) match</code></li>
+<li id='L8'><code>    case Result.Ok(skill) =&gt; skill</code></li>
+<li id='L9'><code>    case Result.Err(error) =&gt; throw IllegalStateException(error)</code></li>
+<li id='L10'><code></code></li>
+<li id='L11'><code>  @mainargs.main(doc = "Demonstrate generic text editing through the coding capability, without a model or external runtime.")</code></li>
+<li id='L12'><code>  def main(): Unit =</code></li>
+<li id='L13'><code>    val root = os.temp.dir(prefix = "capybara-coding-demo-")</code></li>
+<li id='L14'><code>    try</code></li>
+<li id='L15'><code>      os.write(root / "Greeting.scala", "val greeting = \"hello, world\"\n")</code></li>
+<li id='L16'><code>      os.write(root / "README.md", "A generic text-editing demonstration.\n")</code></li>
+<li id='L17'><code>      val original = loaded("skills/coding")</code></li>
+<li id='L18'><code>      val factory = s"editing.internal.configured(${ujson.write(root.toString)})"</code></li>
+<li id='L19'><code>      val skill = original.copy(bindings = original.bindings.map(b =&gt;</code></li>
+<li id='L20'><code>        (name = b.name, tpe = b.tpe, value = factory)))</code></li>
+<li id='L21'><code>      val code = os.read(os.pwd / "examples/snippets/coding.scala")</code></li>
+<li id='L22'><code>      val builtins = loaded("builtin-skills/capybara-builtins")</code></li>
+<li id='L23'><code>      val output = ReplExec.runCode(builtins, skill, code) match</code></li>
+<li id='L24'><code>        case Result.Ok(value) =&gt; value</code></li>
+<li id='L25'><code>        case Result.Err(error) =&gt; throw IllegalStateException(error)</code></li>
+<li id='L26'><code>      require(!output.failed, s"Coding demo failed: ${output.stderr}")</code></li>
+<li id='L27'><code>      val values = output.stdout.linesIterator.map(ujson.read(_)("special.success")).toVector</code></li>
+<li id='L28'><code>      require(values.size == 4 &amp;&amp; values(1).str.contains("hello, world") &amp;&amp;</code></li>
+<li id='L29'><code>        values(2).str.contains("hello, capybara"), "Demo did not apply the text edit")</code></li>
+<li id='L30'><code>      scala.Console.println(s"Files: ${values(0).arr.map(_.str).mkString(", ")}")</code></li>
+<li id='L31'><code>      scala.Console.println(s"Before: ${values(1).str.trim}")</code></li>
+<li id='L32'><code>      scala.Console.println(s"After: ${values(2).str.trim}")</code></li>
+<li id='L33'><code>      scala.Console.println(s"Created notes.txt: ${values(3).str.trim}")</code></li>
+<li id='L34'><code>      val rejected = ReplExec.runCode(builtins, skill,</code></li>
+<li id='L35'><code>        "coding.edit(\"Greeting.scala\")(text =&gt; { puts(text); text })")</code></li>
+<li id='L36'><code>      require(rejected.isInstanceOf[Result.Err[?]], "Expected the capture checker to reject captured output")</code></li>
+<li id='L37'><code>      scala.Console.println("Rejected: edit callback captures output")</code></li>
+<li id='L38'><code>      scala.Console.println(s"Workspace kept at: $root")</code></li>
+<li id='L39'><code>    catch</code></li>
+<li id='L40'><code>      case error: Throwable =&gt;</code></li>
+<li id='L41'><code>        os.remove.all(root)</code></li>
+<li id='L42'><code>        throw error</code></li></ol></html>

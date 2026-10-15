@@ -15,7 +15,7 @@
 
 {{stack footer}}
 
-Source: [loadFrom](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/Skills.scala#L71-L91), [renderPrompt](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/Skills.scala#L99-L123)
+Source: [loadFrom](assets/source/skills-loader.html), [renderPrompt](assets/source/skills-loader.html)
 
 {{end-stack}}
 

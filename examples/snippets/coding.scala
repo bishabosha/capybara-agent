@@ -1,9 +1,8 @@
-puts(coding.sandboxChecks())
-puts(coding.test())
-coding.transformSource { source =>
-  source.replace("return text.split(' ').length;",
-    """const clean = text.trim();
-  return clean === '' ? 0 : clean.split(/\s+/u).length;""")
+puts(coding.list("."))
+puts(coding.read("Greeting.scala"))
+coding.edit("Greeting.scala") { text =>
+  text.replace("hello, world", "hello, capybara")
 }
-puts(coding.test())
-puts(coding.diff())
+coding.write("notes.txt", "Edited through the coding capability.\n")
+puts(coding.read("Greeting.scala"))
+puts(coding.read("notes.txt"))

@@ -18,7 +18,7 @@ Implementation JAR packaging omits the snippet's safe-mode flag.
 
 {{stack footer}}
 
-Source: [setSafeMode](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L174-L181), [separate implementation packaging](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L490-L517)
+Source: [setSafeMode](assets/source/repl-exec.html), [separate implementation packaging](assets/source/repl-exec.html)
 
 {{end-stack}}
 

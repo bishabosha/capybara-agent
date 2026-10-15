@@ -16,7 +16,7 @@ This loop performs no automatic history compaction. `CAPYBARA_CONTEXT_WINDOW` in
 
 {{stack footer}}
 
-Source: [serialized messages](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/OpenAICompatibleClient.scala#L66-L71), [continueSession](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/scalaAgentDemo.scala#L121-L152), [context display setting](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L37-L42)
+Source: [serialized messages](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/OpenAICompatibleClient.scala#L66-L71), [continueSession](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/scalaAgentDemo.scala#L121-L152), [context display setting](assets/source/scala-agent.html)
 
 {{end-stack}}
 

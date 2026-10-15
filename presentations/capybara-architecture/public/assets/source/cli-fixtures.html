@@ -1,0 +1,36 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>test/src/SkillRunFixture.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>test/src/SkillRunFixture.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>/** Configure trusted factories for CLI tests; public interfaces and snippets stay unchanged. */</code></li>
+<li id='L4'><code>object SkillRunFixture:</code></li>
+<li id='L5'><code>  def run(skills: Seq[Skill], snippet: os.Path): ReplExec.CodeOutput =</code></li>
+<li id='L6'><code>    val root = os.temp.dir(prefix = "capybara-cli-skills-")</code></li>
+<li id='L7'><code>    val stdout = new java.io.ByteArrayOutputStream()</code></li>
+<li id='L8'><code>    val stderr = new java.io.ByteArrayOutputStream()</code></li>
+<li id='L9'><code>    try</code></li>
+<li id='L10'><code>      val directories = skills.map { skill =&gt;</code></li>
+<li id='L11'><code>        val directory = root / skill.universe</code></li>
+<li id='L12'><code>        os.makeDir.all(directory / "scripts")</code></li>
+<li id='L13'><code>        os.write(directory / "SKILL.md", s"---\nname: ${skill.name}\ndescription: CLI fixture\n---\n")</code></li>
+<li id='L14'><code>        os.write(directory / "scripts/Interface.scala", skill.interface)</code></li>
+<li id='L15'><code>        os.write(directory / "scripts/Implementation.scala", skill.code)</code></li>
+<li id='L16'><code>        def quoted(text: String): String = ujson.write(text)</code></li>
+<li id='L17'><code>        val bindings = skill.bindings.map(b =&gt;</code></li>
+<li id='L18'><code>          s"(name = ${quoted(b.name)}, tpe = ${quoted(b.tpe)}, value = ${quoted(b.value)})").mkString("Vector(", ",", ")")</code></li>
+<li id='L19'><code>        val requires = if skill.requires.isEmpty then "" else</code></li>
+<li id='L20'><code>          skill.requires.map(quoted).mkString(", requires = Vector(", ",", ")")</code></li>
+<li id='L21'><code>        os.write(directory / "scripts/Manifest.scala",</code></li>
+<li id='L22'><code>          s"val Manifest = (universe = ${quoted(skill.universe)}, api = ${quoted(skill.api)}, " +</code></li>
+<li id='L23'><code>          s"predef = ${quoted(skill.predef.getOrElse(""))}, bindings = $bindings$requires)")</code></li>
+<li id='L24'><code>        directory.toString</code></li>
+<li id='L25'><code>      }</code></li>
+<li id='L26'><code>      scala.Console.withOut(stdout) {</code></li>
+<li id='L27'><code>        scala.Console.withErr(stderr) {</code></li>
+<li id='L28'><code>          capybara.agent.run("skill-run", "--skill", directories.mkString(","), "--file", snippet.toString)</code></li>
+<li id='L29'><code>        }</code></li>
+<li id='L30'><code>      }</code></li>
+<li id='L31'><code>      ReplExec.CodeOutput(stdout.toString(java.nio.charset.StandardCharsets.UTF_8),</code></li>
+<li id='L32'><code>        stderr.toString(java.nio.charset.StandardCharsets.UTF_8))</code></li>
+<li id='L33'><code>    finally os.remove.all(root)</code></li></ol></html>

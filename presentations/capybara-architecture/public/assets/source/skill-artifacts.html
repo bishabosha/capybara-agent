@@ -1,0 +1,71 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>src/SkillArtifacts.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>src/SkillArtifacts.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import steps.result.Result</code></li>
+<li id='L4'><code>import steps.result.Result.eval.ok</code></li>
+<li id='L5'><code>import steps.result.Result.apply as result</code></li>
+<li id='L6'><code></code></li>
+<li id='L7'><code>/** Only safe interface artifacts are published. Factories and credentials stay in implementation JARs. */</code></li>
+<li id='L8'><code>object SkillArtifacts:</code></li>
+<li id='L9'><code>  val Organization = "dev.capybara.skills"</code></li>
+<li id='L10'><code>  val Version = "0.1.0-SNAPSHOT"</code></li>
+<li id='L11'><code></code></li>
+<li id='L12'><code>  def coordinate(skill: Skill): String = s"$Organization::${skill.universe}-api:$Version"</code></li>
+<li id='L13'><code></code></li>
+<li id='L14'><code>  def dependencies(sources: String*): Seq[String] =</code></li>
+<li id='L15'><code>    val directive = "(?m)^\\s*//&gt;\\s+using\\s+(?:dep|deps|dependencies)\\s+([^\\n]+)".r</code></li>
+<li id='L16'><code>    val localApi = (java.util.regex.Pattern.quote(Organization) +</code></li>
+<li id='L17'><code>      "(?:::([A-Za-z0-9_-]+)-api:|:([A-Za-z0-9_-]+)-api_3:)([^\\s\\\"']+)").r</code></li>
+<li id='L18'><code>    sources.flatMap(source =&gt; directive.findAllMatchIn(source).flatMap { line =&gt;</code></li>
+<li id='L19'><code>      localApi.findAllMatchIn(line.group(1)).map { artifact =&gt;</code></li>
+<li id='L20'><code>        require(artifact.group(3) == Version, s"Local skill API version must be $Version")</code></li>
+<li id='L21'><code>        Option(artifact.group(1)).getOrElse(artifact.group(2))</code></li>
+<li id='L22'><code>      }</code></li>
+<li id='L23'><code>    }).distinct</code></li>
+<li id='L24'><code></code></li>
+<li id='L25'><code>  def publish(skill: Skill, source: os.Path): Unit =</code></li>
+<li id='L26'><code>    val result = os.proc("scala", "--power", "publish", "local", source.toString,</code></li>
+<li id='L27'><code>      "-S", ReplExec.ScalaVersion, "-language:experimental.safe", "--organization", Organization,</code></li>
+<li id='L28'><code>      "--name", s"${skill.universe}-api", "--project-version", Version,</code></li>
+<li id='L29'><code>      "--sources-jar=false", "--doc=false", "--signer", "none")</code></li>
+<li id='L30'><code>      .call(check = false, timeout = 120000, stdout = os.Pipe, stderr = os.Pipe)</code></li>
+<li id='L31'><code>    require(result.exitCode == 0, s"Could not publish safe API ${coordinate(skill)}:\n" +</code></li>
+<li id='L32'><code>      result.out.text() + result.err.text())</code></li>
+<li id='L33'><code></code></li>
+<li id='L34'><code>  @mainargs.main(doc = "Publish checked skill APIs to local Ivy, with dependencies first; never invoke factories.")</code></li>
+<li id='L35'><code>  def main(@mainargs.arg(doc = "Skill name or directory; comma-separated selections are supported") skill: String): Unit =</code></li>
+<li id='L36'><code>    publishLocal(skill) match</code></li>
+<li id='L37'><code>      case Result.Ok(coordinates) =&gt;</code></li>
+<li id='L38'><code>        println("Published safe APIs to local Ivy (implementations remain separate).")</code></li>
+<li id='L39'><code>        println("//&gt; using repository ivy2local")</code></li>
+<li id='L40'><code>        coordinates.foreach(coordinate =&gt; println(s"//&gt; using dep \"$coordinate\""))</code></li>
+<li id='L41'><code>      case Result.Err(error) =&gt;</code></li>
+<li id='L42'><code>        scala.Console.err.println(error)</code></li>
+<li id='L43'><code>        sys.exit(1)</code></li>
+<li id='L44'><code></code></li>
+<li id='L45'><code>  def publishLocal(skillDirectories: String): Result[Seq[String], String] =</code></li>
+<li id='L46'><code>    Result.catchException { case error =&gt; error.toString } {</code></li>
+<li id='L47'><code>      result {</code></li>
+<li id='L48'><code>        val builtins = Skills.loadFrom(os.pwd / "builtin-skills/capybara-builtins").ok</code></li>
+<li id='L49'><code>        val selected = skillDirectories.split(",").toSeq.map(_.trim).map { name =&gt;</code></li>
+<li id='L50'><code>          Skills.loadFrom(if name.contains("/") then os.Path(name, os.pwd) else os.pwd / "skills" / name).ok</code></li>
+<li id='L51'><code>        }</code></li>
+<li id='L52'><code>        val available = selected ++ Skills.loadAll(os.pwd / "skills")</code></li>
+<li id='L53'><code>        val dependencies = Skills.resolve(selected.map(_.universe), available, builtins, includeApis = true).ok</code></li>
+<li id='L54'><code>        val order = (selected.filter(_.universe == builtins.universe) ++ dependencies).distinctBy(_.universe)</code></li>
+<li id='L55'><code>        require(order.nonEmpty, "Select a skill with a public API")</code></li>
+<li id='L56'><code>        // Validate the normal build without constructing capabilities. Explicit publication</code></li>
+<li id='L57'><code>        // refreshes Ivy even when runtime JARs are cached or the Ivy artifact was removed.</code></li>
+<li id='L58'><code>        val _ = ReplExec.prepareSkills(builtins, selected).ok</code></li>
+<li id='L59'><code>        val staging = os.temp.dir(prefix = "capybara-publish-")</code></li>
+<li id='L60'><code>        try</code></li>
+<li id='L61'><code>          for current &lt;- order do</code></li>
+<li id='L62'><code>            val source = staging / current.universe / "Interface.scala"</code></li>
+<li id='L63'><code>            os.write(source, current.interface, createFolders = true)</code></li>
+<li id='L64'><code>            publish(current, source)</code></li>
+<li id='L65'><code>        finally os.remove.all(staging)</code></li>
+<li id='L66'><code>        order.map(coordinate)</code></li>
+<li id='L67'><code>      }</code></li>
+<li id='L68'><code>    }.flatMap(identity)</code></li></ol></html>

@@ -1,0 +1,68 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>Generated full GitHub demo REPL transcript</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>Generated full GitHub demo REPL transcript</h1><ol><li id='L1'><code>// Generated command transcript for skills 'github'.</code></li>
+<li id='L2'><code>// The per-call UUID is normalized; all methods use the actual scaffold templates.</code></li>
+<li id='L3'><code>// Initial ReplDriver language: experimental.captureChecking.</code></li>
+<li id='L4'><code>// Cache packaging, if needed, happens before these REPL commands.</code></li>
+<li id='L5'><code></code></li>
+<li id='L6'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/capybara-builtins/sigs.jar</code></li>
+<li id='L7'><code></code></li>
+<li id='L8'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/capybara-builtins/impl.jar</code></li>
+<li id='L9'><code></code></li>
+<li id='L10'><code>import system_impl.builtins; import builtins.given; import builtins.{puts, putsErr}</code></li>
+<li id='L11'><code></code></li>
+<li id='L12'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/coding/sigs.jar</code></li>
+<li id='L13'><code></code></li>
+<li id='L14'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/github/sigs.jar</code></li>
+<li id='L15'><code></code></li>
+<li id='L16'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/coding/impl.jar</code></li>
+<li id='L17'><code></code></li>
+<li id='L18'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/github/impl.jar</code></li>
+<li id='L19'><code></code></li>
+<li id='L20'><code>// HOST: clear the language-feature setting before changing mode.</code></li>
+<li id='L21'><code></code></li>
+<li id='L22'><code>:settings -language:experimental.safe</code></li>
+<li id='L23'><code></code></li>
+<li id='L24'><code>def agentCode_00000000_0000_0000_0000_000000000001(using output: builtins.OutputStreams, coding: editing.TextFiles, github: githubskill.GitHub): Unit = {</code></li>
+<li id='L25'><code>// Select universes ["coding", "github"]. This performs real writes with production wiring.</code></li>
+<li id='L26'><code>puts(github.lookupIssue(1))</code></li>
+<li id='L27'><code>val topic = github.createBranch("capybara/issue-1")</code></li>
+<li id='L28'><code>coding.edit("src/word-count.mjs") { source =&gt;</code></li>
+<li id='L29'><code>  source.replace("return text.split(' ').length;",</code></li>
+<li id='L30'><code>    """const clean = text.trim();</code></li>
+<li id='L31'><code>  return clean === '' ? 0 : clean.split(/\s+/u).length;""")</code></li>
+<li id='L32'><code>}</code></li>
+<li id='L33'><code>puts(coding.read("src/word-count.mjs"))</code></li>
+<li id='L34'><code>val pushed = github.commit(topic, "Handle empty input and mixed whitespace",</code></li>
+<li id='L35'><code>  Seq("src/word-count.mjs"))</code></li>
+<li id='L36'><code>puts(github.createPullRequest(pushed,</code></li>
+<li id='L37'><code>  "Handle empty input and mixed whitespace", "Fixes #1"))</code></li>
+<li id='L38'><code>puts(github.checks(pushed))</code></li>
+<li id='L39'><code></code></li>
+<li id='L40'><code>()</code></li>
+<li id='L41'><code>}</code></li>
+<li id='L42'><code></code></li>
+<li id='L43'><code></code></li>
+<li id='L44'><code>// HOST: clear the language-feature setting again.</code></li>
+<li id='L45'><code></code></li>
+<li id='L46'><code>:settings -language:experimental.captureChecking</code></li>
+<li id='L47'><code></code></li>
+<li id='L48'><code>def harnessEntry_00000000_0000_0000_0000_000000000001(__harnessStdout: java.io.PrintStream, __harnessStderr: java.io.PrintStream): Boolean =</code></li>
+<li id='L49'><code>{</code></li>
+<li id='L50'><code>given __capybara_output: builtins.OutputStreams = builtins.outputStreams(__harnessStdout, __harnessStderr)</code></li>
+<li id='L51'><code>given __capybara_coding: editing.TextFiles = editing.internal.impl()</code></li>
+<li id='L52'><code>given __capybara_github: githubskill.GitHub = githubskill.internal.impl()</code></li>
+<li id='L53'><code>try { agentCode_00000000_0000_0000_0000_000000000001(using __capybara_output, __capybara_coding, __capybara_github); true }</code></li>
+<li id='L54'><code>catch {</code></li>
+<li id='L55'><code>  case scala.util.control.NonFatal(error) =&gt;</code></li>
+<li id='L56'><code>    __capybara_output.printErr(builtins.baseReflectiveShowable(error))</code></li>
+<li id='L57'><code>    false</code></li>
+<li id='L58'><code>}</code></li>
+<li id='L59'><code>}</code></li>
+<li id='L60'><code></code></li>
+<li id='L61'><code></code></li>
+<li id='L62'><code>// HOST invocation, not a submitted REPL command:</code></li>
+<li id='L63'><code>// invokeEntryPoint("harnessEntry_00000000_0000_0000_0000_000000000001", stdout.stream, stderr.stream)</code></li>
+<li id='L64'><code>// This reflects the compiled entry method with two host-owned PrintStreams.</code></li>
+<li id='L65'><code>// Finally: resetToInitial(), restore initialState, and clear diagnostics.</code></li></ol></html>

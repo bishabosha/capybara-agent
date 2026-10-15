@@ -1,7 +1,7 @@
 package capybara.agent
 
 import steps.result.Result
-import steps.result.Result.eval.{ok, raise}
+import steps.result.Result.eval.ok
 import steps.result.Result.apply as result
 
 /** Direct developer entry point. Does not initialize ScalaAgent or a model provider. */
@@ -26,12 +26,11 @@ object SkillRunner:
     Result.catchException { case error => error.toString } {
       result {
         val builtins = Skills.loadFrom(os.pwd / "builtin-skills" / "capybara-builtins").ok
-        val skill =
-          if skillDirectory == "basic" then Skills.Basic
-          else Skills.loadFrom(os.Path(skillDirectory, os.pwd)).ok
-        if skill.name != skill.universe then
-          raise(s"Skill name '${skill.name}' must match universe '${skill.universe}'.")
+        val selected = skillDirectory.split(",").toSeq.map(_.trim).map { name =>
+          if name == "basic" then Skills.Basic
+          else Skills.loadFrom(if name.contains("/") then os.Path(name, os.pwd) else os.pwd / "skills" / name).ok
+        }
         val code = Skills.readSafely(os.Path(snippetFile, os.pwd)).ok
-        ReplExec.runCode(builtins, skill, code).ok
+        ReplExec.runCode(builtins, selected, code, CancellationToken.Never).ok
       }
     }.flatMap(identity)

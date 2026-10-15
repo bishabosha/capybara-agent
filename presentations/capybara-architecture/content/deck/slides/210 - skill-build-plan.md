@@ -2,23 +2,21 @@
 (id = "skill-build-plan", seconds = 75, layout = "standard")
 ---
 
-## A skill produces two separately compiled JARs
+## Compile and wire skills in dependency order
 
-1. Read metadata, manifest, interface source and implementation source.
-2. Compare a digest with `.agent-runtime/interface/<name>/sigs.hash`.
-3. Package **only the interface** as `sigs.jar` in safe mode.
-4. Package the implementation as `impl.jar`, with `sigs.jar` on its compile classpath.
-5. Publish the digest only after both JARs succeed.
-
-The baseline builtins follows the same pipeline. `basic` adds no selected-skill JARs.
-
+1. Resolve selected skills and local API dependencies; reject cycles.
+2. Compile each interface in safe mode.
+3. Publish its API locally under `dev.capybara.skills`.
+4. Compile its implementation against its own API and required safe APIs.
+5. Construct manifest bindings and pass contexts into the safe method.
+6. Compile the combined snippet in safe mode and invoke its trusted caller.
 
 {{stack footer}}
 
-Source: [ensureCompiled](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L375-L380), [compileSkill](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L440-L525)
+Source: [compiler and cache](assets/source/repl-exec.html), [local artifacts](assets/source/skill-artifacts.html)
 
 {{end-stack}}
 
 ## Speaker notes
 
-A failed rebuild removes the hash marker before replacing artifacts. The digest includes Scala version, interface source, implementation source, API description, predef and bindings. Skill names and universe names must agree because packaging and loading use different fields.
+Only interface artifacts are published; implementations stay in separate cached JARs. Dependency API JAR contents participate in the cache digest, so interface changes invalidate dependent builds. Each implementation can consume another capability through its public interface.

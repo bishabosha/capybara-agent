@@ -18,7 +18,7 @@ The driver uses `Some(ScalaClassLoader)`, an empty `extraPredef`, and a quiet in
 
 {{stack footer}}
 
-Source: [Session constructor and state](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L74-L96)
+Source: [Session constructor and state](assets/source/repl-exec.html)
 
 {{end-stack}}
 

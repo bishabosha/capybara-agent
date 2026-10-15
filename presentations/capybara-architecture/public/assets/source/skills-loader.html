@@ -1,0 +1,168 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>src/Skills.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>src/Skills.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import scalanotation.Readers</code></li>
+<li id='L4'><code>import steps.result.Result, Result.eval.ok</code></li>
+<li id='L5'><code>import Result.apply as result</code></li>
+<li id='L6'><code>import os.{Path, read, list, exists, isDir}</code></li>
+<li id='L7'><code>import org.virtuslab.yaml.*</code></li>
+<li id='L8'><code></code></li>
+<li id='L9'><code>type SkillBinding = (name: String, tpe: String, value: String)</code></li>
+<li id='L10'><code>type SkillManifest = (universe: String, api: String, predef: Option[String], bindings: Seq[SkillBinding])</code></li>
+<li id='L11'><code>type ComposedSkillManifest = (universe: String, api: String, predef: Option[String], bindings: Seq[SkillBinding], requires: Option[Seq[String]])</code></li>
+<li id='L12'><code></code></li>
+<li id='L13'><code>case class Skill(</code></li>
+<li id='L14'><code>    name: String,</code></li>
+<li id='L15'><code>    description: String,</code></li>
+<li id='L16'><code>    universe: String,</code></li>
+<li id='L17'><code>    interface: String,</code></li>
+<li id='L18'><code>    code: String,</code></li>
+<li id='L19'><code>    api: String,</code></li>
+<li id='L20'><code>    predef: Option[String],</code></li>
+<li id='L21'><code>    requiresRuntimeClasspath: Boolean = true,</code></li>
+<li id='L22'><code>    bindings: Seq[SkillBinding] = Nil,</code></li>
+<li id='L23'><code>    requires: Seq[String] = Nil,</code></li>
+<li id='L24'><code>    apiDependencies: Seq[String] = Nil</code></li>
+<li id='L25'><code>)</code></li>
+<li id='L26'><code></code></li>
+<li id='L27'><code>case class SkillMd(</code></li>
+<li id='L28'><code>    name: String,</code></li>
+<li id='L29'><code>    description: String</code></li>
+<li id='L30'><code>) derives YamlDecoder</code></li>
+<li id='L31'><code></code></li>
+<li id='L32'><code>object Skills {</code></li>
+<li id='L33'><code></code></li>
+<li id='L34'><code>  val Basic: Skill =</code></li>
+<li id='L35'><code>    Skill(</code></li>
+<li id='L36'><code>      name = "basic",</code></li>
+<li id='L37'><code>      description =</code></li>
+<li id='L38'><code>        "Runs Scala code with only the Scala and Java standard libraries. Use for arithmetic, strings, collections, dates, parsing, and other basic computation that does not need files, network, shell commands, or a skill-specific API.",</code></li>
+<li id='L39'><code>      universe = "basic",</code></li>
+<li id='L40'><code>      interface = "",</code></li>
+<li id='L41'><code>      code = "",</code></li>
+<li id='L42'><code>      api = """No skill-specific capabilities are supplied.</code></li>
+<li id='L43'><code>        |Write a Scala expression or block directly; call `puts(value)` to emit the result.</code></li>
+<li id='L44'><code>        |Use little or no internal reasoning for this universe.</code></li>
+<li id='L45'><code>        |Keep code short and direct for simple tasks; avoid helper methods unless they materially clarify the computation.</code></li>
+<li id='L46'><code>        |When a vague optimization preference is given for a small bounded task, use the straightforward efficient approach; do not debate numeric representation unless it affects the requested result.</code></li>
+<li id='L47'><code>        |Do not mention whether standard library or Predef methods are available before calling the tool.</code></li>
+<li id='L48'><code>        |Do not call global `println`; use `puts(value)` for structured output.</code></li>
+<li id='L49'><code>        |The final expression is discarded. Without an explicit print, successful execution has no output.</code></li>
+<li id='L50'><code>        |Example `scala_code`: `puts(List(1, 2, 3).sum)`</code></li>
+<li id='L51'><code>        |""".stripMargin,</code></li>
+<li id='L52'><code>      predef = None,</code></li>
+<li id='L53'><code>      requiresRuntimeClasspath = false</code></li>
+<li id='L54'><code>    )</code></li>
+<li id='L55'><code></code></li>
+<li id='L56'><code>  def parseSkill(content: String): Result[SkillMd, String] =</code></li>
+<li id='L57'><code>    content match</code></li>
+<li id='L58'><code>      case s"""---\n$yaml\n---\n${_}""" =&gt;</code></li>
+<li id='L59'><code>        yaml.as[SkillMd] match</code></li>
+<li id='L60'><code>          case Right(md) =&gt; Result.Ok(md)</code></li>
+<li id='L61'><code>          case Left(e)   =&gt; Result.Err(s"skill md parse error: $e")</code></li>
+<li id='L62'><code></code></li>
+<li id='L63'><code>      case _ =&gt; Result.Err("invalid manifest format")</code></li>
+<li id='L64'><code></code></li>
+<li id='L65'><code>  def parseManifest(content: String): Result[SkillManifest, String] =</code></li>
+<li id='L66'><code>    Readers</code></li>
+<li id='L67'><code>      .readDeclAs[SkillManifest](content, rootName = "Manifest")</code></li>
+<li id='L68'><code>      .mapErr(e =&gt; s"manifest parse error: ${e.format}")</code></li>
+<li id='L69'><code></code></li>
+<li id='L70'><code>  def readSafely(path: Path): Result[String, String] =</code></li>
+<li id='L71'><code>    Result.catchException({ case e =&gt;</code></li>
+<li id='L72'><code>      s"error reading file $path: ${e.getMessage}"</code></li>
+<li id='L73'><code>    })(read(path))</code></li>
+<li id='L74'><code></code></li>
+<li id='L75'><code>  def loadFrom(dir: Path): Result[Skill, String] = result {</code></li>
+<li id='L76'><code>    val skillMd = dir / "SKILL.md"</code></li>
+<li id='L77'><code>    val interfaceFile = dir / "scripts/Interface.scala"</code></li>
+<li id='L78'><code>    val implFile = dir / "scripts/Implementation.scala"</code></li>
+<li id='L79'><code>    val manifestFile = dir / "scripts/Manifest.scala"</code></li>
+<li id='L80'><code></code></li>
+<li id='L81'><code>    val skill = parseSkill(readSafely(skillMd).ok).ok</code></li>
+<li id='L82'><code>    val manifestText = readSafely(manifestFile).ok</code></li>
+<li id='L83'><code>    val dependencyPattern = "(?s).*\\brequires\\s*=.*".r</code></li>
+<li id='L84'><code>    val (manifest, dependencies) = manifestText match</code></li>
+<li id='L85'><code>      case dependencyPattern() =&gt;</code></li>
+<li id='L86'><code>        val composed = Readers.readDeclAs[ComposedSkillManifest](manifestText, rootName = "Manifest")</code></li>
+<li id='L87'><code>          .mapErr(e =&gt; s"manifest parse error: ${e.format}").ok</code></li>
+<li id='L88'><code>        ((universe = composed.universe, api = composed.api, predef = composed.predef,</code></li>
+<li id='L89'><code>          bindings = composed.bindings), composed.requires.getOrElse(Nil))</code></li>
+<li id='L90'><code>      case _ =&gt; (parseManifest(manifestText).ok, Nil)</code></li>
+<li id='L91'><code>    val interfaceCode = readSafely(interfaceFile).ok</code></li>
+<li id='L92'><code>    val implCode = readSafely(implFile).ok</code></li>
+<li id='L93'><code>    Skill(</code></li>
+<li id='L94'><code>      name = skill.name,</code></li>
+<li id='L95'><code>      description = skill.description,</code></li>
+<li id='L96'><code>      universe = manifest.universe,</code></li>
+<li id='L97'><code>      interface = interfaceCode,</code></li>
+<li id='L98'><code>      code = implCode,</code></li>
+<li id='L99'><code>      api = manifest.api,</code></li>
+<li id='L100'><code>      predef = manifest.predef.filter(_.nonEmpty),</code></li>
+<li id='L101'><code>      bindings = manifest.bindings,</code></li>
+<li id='L102'><code>      requires = dependencies.distinct,</code></li>
+<li id='L103'><code>      apiDependencies = SkillArtifacts.dependencies(interfaceCode, implCode)</code></li>
+<li id='L104'><code>    )</code></li>
+<li id='L105'><code>  }</code></li>
+<li id='L106'><code></code></li>
+<li id='L107'><code>  /** Dependency order is also factory-construction order. Only declared safe APIs form compile classpaths. */</code></li>
+<li id='L108'><code>  def resolve(requested: Seq[String], available: Seq[Skill], builtins: Skill,</code></li>
+<li id='L109'><code>              includeApis: Boolean = false): Result[Vector[Skill], String] =</code></li>
+<li id='L110'><code>    Result.catchException { case error =&gt; error.getMessage } {</code></li>
+<li id='L111'><code>      val known = (available :+ builtins).groupBy(_.universe).view.mapValues(_.head).toMap</code></li>
+<li id='L112'><code>      val completed = scala.collection.mutable.Set.empty[String]</code></li>
+<li id='L113'><code>      val active = scala.collection.mutable.Set.empty[String]</code></li>
+<li id='L114'><code>      val ordered = Vector.newBuilder[Skill]</code></li>
+<li id='L115'><code>      def visit(name: String): Unit =</code></li>
+<li id='L116'><code>        if !completed(name) then</code></li>
+<li id='L117'><code>          require(!active(name), s"Skill dependency cycle at: $name")</code></li>
+<li id='L118'><code>          val skill = known.getOrElse(name, throw IllegalArgumentException(s"Universe not found: $name"))</code></li>
+<li id='L119'><code>          require(skill.name == skill.universe, s"Skill name must match universe: $name")</code></li>
+<li id='L120'><code>          active += name</code></li>
+<li id='L121'><code>          skill.requires.foreach(visit)</code></li>
+<li id='L122'><code>          if includeApis then skill.apiDependencies.filter(known.contains).foreach(visit)</code></li>
+<li id='L123'><code>          active -= name</code></li>
+<li id='L124'><code>          completed += name</code></li>
+<li id='L125'><code>          if skill.requiresRuntimeClasspath &amp;&amp; name != builtins.universe then ordered += skill</code></li>
+<li id='L126'><code>      requested.foreach(visit)</code></li>
+<li id='L127'><code>      val skills = ordered.result()</code></li>
+<li id='L128'><code>      if !includeApis then</code></li>
+<li id='L129'><code>        val _ = SkillScaffold.bindings(builtins, skills)</code></li>
+<li id='L130'><code>      skills</code></li>
+<li id='L131'><code>    }</code></li>
+<li id='L132'><code></code></li>
+<li id='L133'><code>  def loadAll(dir: Path): Seq[Skill] =</code></li>
+<li id='L134'><code>    // Todo: errors are swallowed</code></li>
+<li id='L135'><code>    if isDir(dir) then list(dir).filter(p =&gt; exists(p) &amp;&amp; isDir(p)).flatMap(loadFrom)</code></li>
+<li id='L136'><code>    else Nil</code></li>
+<li id='L137'><code></code></li>
+<li id='L138'><code>  def renderPrompt(sep: String, skills: Seq[Skill]): String = {</code></li>
+<li id='L139'><code>    skills</code></li>
+<li id='L140'><code>      .map { skill =&gt;</code></li>
+<li id='L141'><code>        if skill.requiresRuntimeClasspath then</code></li>
+<li id='L142'><code>          s"""#### ${skill.universe}</code></li>
+<li id='L143'><code>          |${skill.description}</code></li>
+<li id='L144'><code>          |```scala</code></li>
+<li id='L145'><code>          |${skill.interface}</code></li>
+<li id='L146'><code>          |```</code></li>
+<li id='L147'><code>          |Calling convention:</code></li>
+<li id='L148'><code>          |${skill.api}</code></li>
+<li id='L149'><code>          |Required skills (loaded automatically): ${skill.requires.mkString(", ")}</code></li>
+<li id='L150'><code>          |The harness supplies these named contextual parameters to your function (do not create them yourself):</code></li>
+<li id='L151'><code>          |```scala</code></li>
+<li id='L152'><code>          |${skill.bindings.map(b =&gt; s"${b.name}: ${b.tpe}").mkString("(using ", ", ", ")")}</code></li>
+<li id='L153'><code>          |```</code></li>
+<li id='L154'><code>          |""".stripMargin</code></li>
+<li id='L155'><code>        else</code></li>
+<li id='L156'><code>          s"""#### ${skill.universe}</code></li>
+<li id='L157'><code>          |${skill.description}</code></li>
+<li id='L158'><code>          |</code></li>
+<li id='L159'><code>          |${skill.api}</code></li>
+<li id='L160'><code>          |This universe does not compile or load a universe-specific implementation JAR beyond the baseline builtins.</code></li>
+<li id='L161'><code>          |""".stripMargin</code></li>
+<li id='L162'><code>      }</code></li>
+<li id='L163'><code>      .mkString(sep)</code></li>
+<li id='L164'><code>  }</code></li>
+<li id='L165'><code>}</code></li></ol></html>

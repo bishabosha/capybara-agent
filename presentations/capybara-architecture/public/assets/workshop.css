@@ -8,3 +8,16 @@
 /* Split trusted-entry declaration uses the same readable size on both slides. */
 .reveal #repl-entry pre,
 .reveal #repl-entry-body pre { font-size: 28px; line-height: 1.3; }
+
+/* Composed transcript stays split into complete, readable stages. */
+.reveal #github-repl-load pre,
+.reveal #github-repl-safe pre,
+.reveal #github-repl-entry pre,
+.reveal #github-repl-invoke pre { font-size: 28px; line-height: 1.3; }
+.reveal #github-repl-load pre code,
+.reveal #github-repl-safe pre code,
+.reveal #github-repl-entry pre code,
+.reveal #github-repl-invoke pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.reveal #github-project pre,
+.reveal #github-demo-run pre { font-size: 27px; line-height: 1.4; }

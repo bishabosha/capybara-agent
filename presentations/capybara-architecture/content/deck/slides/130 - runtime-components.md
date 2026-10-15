@@ -11,14 +11,14 @@
 | `ReplExec.runCodeHarness` | Compiles and runs `puts(filesystem.pwd())` |
 | `ScalaAgent.messagesFromChunks` | Encodes the result as a tool message in history |
 
-`availableSkills.find(_.universe == …)` performs selection. An unknown name returns `Universe not found`, without invoking the REPL.
+`Skills.resolve(requestedUniverses, …)` selects skills and their manifest contexts. An unknown name returns `Universe not found`, without invoking the REPL.
 
 {{stack footer}}
 
-Source: [tool dispatch](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L252-L283), [history encoding](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L355-L390)
+Source: [tool dispatch](assets/source/scala-agent.html), [history encoding](assets/source/scala-agent.html)
 
 {{end-stack}}
 
 ## Speaker notes
 
-Sources: src/ScalaAgent.scala, src/ModelProvider.scala, src/Skills.scala, src/ReplExec.scala, src/Logger.scala, src/UsageTracker.scala, src/CancellationToken.scala. Each provider normalizes text, thinking, tool-call and usage events. Provider authentication belongs to the host runtime. Do not expose its environment to the isolated test process.
+Sources: src/ScalaAgent.scala, src/ModelProvider.scala, src/Skills.scala, src/ReplExec.scala, src/Logger.scala, src/UsageTracker.scala, src/CancellationToken.scala. Each provider normalizes text, thinking, tool-call and usage events. Provider authentication belongs to the host runtime. The safe snippet receives capability parameters instead of ambient host credentials.

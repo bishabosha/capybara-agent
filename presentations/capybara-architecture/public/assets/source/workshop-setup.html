@@ -1,0 +1,62 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>src/WorkshopSetup.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>src/WorkshopSetup.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import steps.result.Result</code></li>
+<li id='L4'><code></code></li>
+<li id='L5'><code>/** Host setup only: copy tracked starters and prepare skill builds without invoking factories. */</code></li>
+<li id='L6'><code>object WorkshopSetup:</code></li>
+<li id='L7'><code>  case class Workspace(name: String, root: os.Path, environment: os.Path, created: Boolean)</code></li>
+<li id='L8'><code></code></li>
+<li id='L9'><code>  private[agent] def shellQuote(text: String): String = "'" + text.replace("'", "'\"'\"'") + "'"</code></li>
+<li id='L10'><code></code></li>
+<li id='L11'><code>  def create(repository: os.Path, directory: os.Path): Seq[Workspace] =</code></li>
+<li id='L12'><code>    val starters = Seq(</code></li>
+<li id='L13'><code>      "coding" -&gt; (repository / "examples/coding-workspace"),</code></li>
+<li id='L14'><code>      "github" -&gt; (repository / "presentations/capybara-architecture/workshop/project")</code></li>
+<li id='L15'><code>    )</code></li>
+<li id='L16'><code>    // Validate all destinations before copying anything. Existing workspaces and</code></li>
+<li id='L17'><code>    // edited environment files belong to the participant and are never replaced.</code></li>
+<li id='L18'><code>    val planned = starters.map { (name, source) =&gt;</code></li>
+<li id='L19'><code>      require(os.isDir(source), s"Missing workshop starter: $source. Run from the Capybara checkout.")</code></li>
+<li id='L20'><code>      val target = directory / name</code></li>
+<li id='L21'><code>      val environment = directory / s"$name.env"</code></li>
+<li id='L22'><code>      val contents = s"export CAPYBARA_CODING_ROOT=${shellQuote(target.toString)}\n"</code></li>
+<li id='L23'><code>      require(!os.exists(target) || os.isDir(target), s"Workspace path is not a directory: $target")</code></li>
+<li id='L24'><code>      require(!os.exists(environment) || (os.isFile(environment) &amp;&amp; os.read(environment) == contents),</code></li>
+<li id='L25'><code>        s"Environment file already contains different settings: $environment. Choose another --directory.")</code></li>
+<li id='L26'><code>      (name, source, target, environment, contents)</code></li>
+<li id='L27'><code>    }</code></li>
+<li id='L28'><code>    os.makeDir.all(directory)</code></li>
+<li id='L29'><code>    planned.map { (name, source, target, environment, contents) =&gt;</code></li>
+<li id='L30'><code>      val created = !os.exists(target)</code></li>
+<li id='L31'><code>      if created then os.copy(source, target)</code></li>
+<li id='L32'><code>      if !os.exists(environment) then os.write(environment, contents)</code></li>
+<li id='L33'><code>      Workspace(name, target, environment, created)</code></li>
+<li id='L34'><code>    }</code></li>
+<li id='L35'><code></code></li>
+<li id='L36'><code>  @mainargs.main(doc = "Prepare both workshop workspaces and skill builds; preserve existing participant edits.")</code></li>
+<li id='L37'><code>  def main(@mainargs.arg(doc = "Workspace parent; choose a new directory for a fresh workshop")</code></li>
+<li id='L38'><code>      directory: String = ".agent-runtime/demo-workspaces"): Unit =</code></li>
+<li id='L39'><code>    val builtins = load("builtin-skills/capybara-builtins")</code></li>
+<li id='L40'><code>    val skills = Seq(load("skills/coding"), load("skills/github"))</code></li>
+<li id='L41'><code>    ReplExec.prepareSkills(builtins, skills) match</code></li>
+<li id='L42'><code>      case Result.Err(error) =&gt; throw IllegalStateException(error)</code></li>
+<li id='L43'><code>      case Result.Ok(_) =&gt; ()</code></li>
+<li id='L44'><code>    val workspaces = create(os.pwd, os.Path(directory, os.pwd))</code></li>
+<li id='L45'><code>    println("Workshop ready. Skill APIs and implementations are built.")</code></li>
+<li id='L46'><code>    for workspace &lt;- workspaces do</code></li>
+<li id='L47'><code>      println(s"${workspace.name}: ${workspace.root} (${if workspace.created then "created" else "kept existing edits"})")</code></li>
+<li id='L48'><code>    println("\nCoding demo:")</code></li>
+<li id='L49'><code>    println(s". ${shellQuote(workspaces.head.environment.toString)}")</code></li>
+<li id='L50'><code>    println("./mill run skill-run --skill coding --file examples/snippets/coding.scala")</code></li>
+<li id='L51'><code>    println("\nGitHub demo:")</code></li>
+<li id='L52'><code>    println(s". ${shellQuote(workspaces(1).environment.toString)}")</code></li>
+<li id='L53'><code>    println("# Set CAPYBARA_GITHUB_REPOSITORY and supply CAPYBARA_GITHUB_TOKEN in your shell.")</code></li>
+<li id='L54'><code>    println("./mill run skill-run --skill github --file examples/snippets/github-lab.scala")</code></li>
+<li id='L55'><code>    println("\nSetup creates local files only. It does not contact GitHub or store credentials.")</code></li>
+<li id='L56'><code></code></li>
+<li id='L57'><code>  private def load(path: String): Skill = Skills.loadFrom(os.pwd / os.RelPath(path)) match</code></li>
+<li id='L58'><code>    case Result.Ok(value) =&gt; value</code></li>
+<li id='L59'><code>    case Result.Err(error) =&gt; throw IllegalStateException(error)</code></li></ol></html>

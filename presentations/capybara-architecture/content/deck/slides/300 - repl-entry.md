@@ -13,9 +13,9 @@ def harnessEntry_00000000_0000_0000_0000_000000000001(
     __harnessStdout: java.io.PrintStream,
     __harnessStderr: java.io.PrintStream
 ): Boolean = {
-  val __capybara_output: builtins.OutputStreams =
+  given __capybara_output: builtins.OutputStreams =
     builtins.outputStreams(__harnessStdout, __harnessStderr)
-  val __capybara_filesystem: fs.Filesystem = fs.internal.impl()
+  given __capybara_filesystem: fs.Filesystem = fs.internal.impl()
 ```
 
 The host clears language features, then selects capture checking. Trusted factories supply the two capability arguments. **The same method continues on the next slide.**
@@ -24,7 +24,7 @@ The host clears language features, then selects capture checking. Trusted factor
 
 {{stack footer}}
 
-Source: [complete transcript](assets/source/repl-transcript.html), [runtime sequence](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L248-L300)
+Source: [complete transcript](assets/source/repl-transcript.html), [runtime sequence](assets/source/repl-exec.html)
 
 {{end-stack}}
 

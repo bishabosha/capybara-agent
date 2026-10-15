@@ -18,7 +18,7 @@ Packaging happens before this sequence on a cache miss. Host actions are labeled
 
 {{stack footer}}
 
-Source: [runExpression order](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L259-L300), [transcript generator](assets/source/skill-transcript.html)
+Source: [runExpression order](assets/source/repl-exec.html), [transcript generator](assets/source/skill-transcript.html)
 
 {{end-stack}}
 

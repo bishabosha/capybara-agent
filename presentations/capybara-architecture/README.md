@@ -1,8 +1,8 @@
 # Capybara Agent architecture and capture-checking workshop
 
-A native `test-blog-renderer` Reveal deck: 58 slides, including two appendices and five exercises. It uses the existing 1600 × 900 theme, fonts, slide fitting, source links, notes and live authoring support. Allow roughly 100–120 minutes including lab setup and discussion.
+A native `test-blog-renderer` Reveal deck: 75 slides, including two appendices and four exercises. It uses the existing 1600 × 900 theme, fonts, slide fitting, source links, notes and live authoring support. Allow roughly 100–120 minutes including lab setup and discussion.
 
-The order is HTTP and Chat Completions (requests, messages, tools, streaming and context), Capybara architecture, skill compilation/classpaths/settings, a complete single-call REPL transcript, skill development with `skill-ide` and `skill-run`, then capture-checking exercises with the implemented coding skill. The first exercise follows all explanatory sections.
+The order is HTTP and Chat Completions (requests, messages, tools, streaming and context), Capybara architecture, skill compilation/classpaths/settings, a complete single-call REPL transcript, skill development with `skill-ide` and `skill-run`, then capture-checking exercises with generic editing and atomic GitHub operations. After the coding API, the deck introduces multi-skill composition, local API publication, explicit runtime requires and public using TextFiles. A full composed-call transcript precedes both demos. The first exercise follows all explanatory sections.
 
 Core source links pin commit `e97130cfd70d9f2a87ef933035e2fd09c7a46b2f`. New skill and transcript sources have local browser-readable snapshots, refreshed by the Scala build. The transcript uses the actual scaffold templates with a normalized per-call UUID; host invocation and reset are explicitly separate from submitted REPL commands.
 
@@ -39,13 +39,32 @@ python3 -m http.server 8765 --bind 127.0.0.1
 
 Open `http://127.0.0.1:8765/deck/`. The exported archive can be served without Scala, Node, npm or a CDN. Rebuilding source snapshots requires the Capybara checkout.
 
-## Runnable GitHub exercise
+## Generic coding demo and capture-checking exercises
 
-See `workshop/README.md` for initialization, the agent prompt, deterministic snippet, capture-checking failures and GitHub publishing steps. The `coding` skill is implemented under the repository's `skills/coding`, with a standard-library Python backend under `scripts/workshop.py`. Node is only the runtime for the small JavaScript target repository.
+Participants run `./mill run workshop-setup` from their Capybara checkout. It
+copies both tracked starters, builds the skills, preserves existing edits and
+prints actual workspace paths and next commands. Source the generated
+`coding.env` or `github.env` to select a demo; credentials are never written there.
+Both demos use ordinary `skill-run` commands and checked-in snippets. Coding runs
+`examples/snippets/coding.scala`. The GitHub demo uses `skill-run --skill github` with
+`examples/snippets/github-lab.scala`; its manifest supplies coding. The deck
+shows setup, complete snippets, recorded CLI results, then rejected captures.
+The `coding` skill uses Scala/JDK file operations directly, with no Node, Python,
+fixed project API or OS process sandbox. The interface, safe compiler and harness
+control which capabilities the snippet can use and retain.
 
-The skill reads and edits approved source, checks pure transformation callbacks, tests a separate read-only snapshot in a macOS sandbox, and returns fixed statuses rather than raw process logs. It does not authenticate or publish to GitHub. Human review and authentication happen in a separate publisher terminal. Unsupported test runtimes fail closed.
+See `workshop/README.md` for generic editing examples, capture-checking exercises
+and the separate GitHub issue-to-PR workflow. `CAPYBARA_CODING_ROOT` selects the
+local editing workspace; it defaults to the process's current directory. A file
+capability intentionally releases ordinary text. Secrets remain in separate
+trusted APIs rather than being inferred from strings by the capture checker.
 
-`WorkshopSuite` validates the public safe-harness path and backend policies through MCP. `PresentationSuite` is an opt-in local native renderer check: create `.agent-runtime/validate-presentation` before invoking it through MCP, then remove the marker afterward. Normal CI needs no local renderer snapshot.
+`WorkshopSuite` exercises the generic interface through the safe harness.
+`CodingDemoSuite` records the ordinary coding CLI run. GitHubSkillSuite records
+the GitHub CLI run against a local HTTP fixture with synthetic credentials. `PresentationSuite` is an opt-in native
+renderer check: create `.agent-runtime/validate-presentation`, run the demo suite
+and renderer suite through MCP, then remove the marker. Normal CI needs no local
+renderer snapshot. The GitHub skill is Scala-native and delegates file access to the editing safe API; neither uses a process runner.
 
 ## Licenses
 

@@ -19,7 +19,7 @@ history ++ messagesFromChunks(chunks)
 
 {{stack footer}}
 
-Source: [new user turn](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/scalaAgentDemo.scala#L99-L119), [system prompt placement](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L150-L160), [history append](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L349-L390)
+Source: [new user turn](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/scalaAgentDemo.scala#L99-L119), [system prompt placement](assets/source/scala-agent.html), [history append](assets/source/scala-agent.html)
 
 {{end-stack}}
 

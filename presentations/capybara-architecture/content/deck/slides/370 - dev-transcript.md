@@ -18,7 +18,7 @@ Next, run `skill-run`, then restart the agent and use the skill through `run_sca
 
 {{stack footer}}
 
-Source: [SkillTranscript](assets/source/skill-transcript.html), [shared scaffold](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/SkillScaffold.scala#L17-L43)
+Source: [SkillTranscript](assets/source/skill-transcript.html), [shared scaffold](assets/source/skill-scaffold.html)
 
 {{end-stack}}
 

@@ -16,7 +16,7 @@ This primer follows `CAPYBARA_PROVIDER=openai`, the Chat Completions adapter.
 
 {{stack footer}}
 
-Source: [request and stream adapter](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/OpenAICompatibleClient.scala#L53-L75), [local dispatch](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L267-L283)
+Source: [request and stream adapter](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/OpenAICompatibleClient.scala#L53-L75), [local dispatch](assets/source/scala-agent.html)
 
 {{end-stack}}
 

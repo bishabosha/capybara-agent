@@ -1,12 +1,11 @@
 <!doctype html><html lang="en"><meta charset="utf-8">
 <title>examples/snippets/coding.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
 code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
-<p><a href="/deck/">Back to deck</a></p><h1>examples/snippets/coding.scala</h1><ol><li id='L1'><code>puts(coding.sandboxChecks())</code></li>
-<li id='L2'><code>puts(coding.test())</code></li>
-<li id='L3'><code>coding.transformSource { source =&gt;</code></li>
-<li id='L4'><code>  source.replace("return text.split(' ').length;",</code></li>
-<li id='L5'><code>    """const clean = text.trim();</code></li>
-<li id='L6'><code>  return clean === '' ? 0 : clean.split(/\s+/u).length;""")</code></li>
-<li id='L7'><code>}</code></li>
-<li id='L8'><code>puts(coding.test())</code></li>
-<li id='L9'><code>puts(coding.diff())</code></li></ol></html>
+<p><a href="/deck/">Back to deck</a></p><h1>examples/snippets/coding.scala</h1><ol><li id='L1'><code>puts(coding.list("."))</code></li>
+<li id='L2'><code>puts(coding.read("Greeting.scala"))</code></li>
+<li id='L3'><code>coding.edit("Greeting.scala") { text =&gt;</code></li>
+<li id='L4'><code>  text.replace("hello, world", "hello, capybara")</code></li>
+<li id='L5'><code>}</code></li>
+<li id='L6'><code>coding.write("notes.txt", "Edited through the coding capability.\n")</code></li>
+<li id='L7'><code>puts(coding.read("Greeting.scala"))</code></li>
+<li id='L8'><code>puts(coding.read("notes.txt"))</code></li></ol></html>

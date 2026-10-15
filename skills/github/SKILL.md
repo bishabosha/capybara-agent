@@ -1,8 +1,8 @@
 ---
 name: github
-description: Complete an issue-to-draft-PR development workflow in a host-approved GitHub repository. Read approved source, implement and test changes, publish a topic branch and open a draft PR without receiving credentials. Pure edit callbacks reject captured capabilities. Runtime policy restricts files, destinations and outgoing content.
+description: Look up issues, create topic branches, commit and push selected local text files, create draft PRs and report exact-commit CI. Local edits use the separate coding skill, imported through its locally published safe API. Credentials remain inside trusted Scala code.
 ---
 
-Configure a profile with `python3 scripts/github_workflow.py init --help`, then set
-`CAPYBARA_GITHUB_PROFILE` and the host-only `CAPYBARA_GITHUB_TOKEN` before starting
-Capybara. See `skills/github/README.md` for the runnable lab and security boundary.
+Configure CAPYBARA_GITHUB_REPOSITORY, CAPYBARA_GITHUB_TOKEN and the coding workspace
+before starting the agent. See skills/github/README.md. No Python or external
+process sandbox is used. The public commit method requires using editing.TextFiles. Its API is imported with using dep; manifest requires supplies the coding runtime context.

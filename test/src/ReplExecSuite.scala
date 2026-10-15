@@ -236,7 +236,7 @@ class ReplExecSuite extends munit.FunSuite:
   }
 
   test("skill IDE setup uses original files and requires no Mill project") {
-    for directory <- Seq("skills/filesystem", "skills/secrets", "builtin-skills/capybara-builtins") do
+    for directory <- Seq("skills/filesystem", "skills/secrets", "skills/coding", "skills/github", "builtin-skills/capybara-builtins") do
       SkillIde.prepare(directory) match
         case Result.Ok(path) =>
           assert(os.list(path / ".bsp").exists(_.ext == "json"))

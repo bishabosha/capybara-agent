@@ -258,7 +258,8 @@ object ReplExec {
 
     def runExpression(
         builtins: Skill,
-        skill: Skill,
+        skills: Seq[Skill],
+        apiSkills: Seq[Skill],
         scalaCode: String,
         cancellationToken: CancellationToken
     ): Result[CodeOutput, String] =
@@ -274,20 +275,25 @@ object ReplExec {
           try
             result {
               loadSkill(builtins).check
-              if skill.requiresRuntimeClasspath && skill.universe != builtins.universe then loadSkill(skill).check
-              val bindings = SkillScaffold.bindings(builtins, skill)
+              apiSkills.foreach(selected =>
+                loadJar(os.rel / ".agent-runtime/interface" / selected.universe / "sigs.jar", selected).check)
+              skills.foreach { selected =>
+                loadJar(os.rel / ".agent-runtime/interface" / selected.universe / "impl.jar", selected).check
+                loadPredef(selected).check
+              }
+              val bindings = SkillScaffold.bindings(builtins, skills)
               registerCurrentClassLoader(trackedExecution.execution)
               if cancellationToken.isCancelled then raise("cancelled")
               setSafeMode(enabled = true)
               val _ = step(
                 SkillScaffold.definition(methodName, bindings, scalaCode),
-                s"while compiling code for universe `${skill.universe}`."
+                s"while compiling code for skills `${skills.map(_.universe).mkString(",")}`."
               ).ok
               if cancellationToken.isCancelled then raise("cancelled")
               setSafeMode(enabled = false)
               val _ = step(
                 SkillScaffold.entryPoint(entryName, methodName, bindings),
-                s"while compiling trusted wiring for universe `${skill.universe}`."
+                s"while compiling trusted wiring for skills `${skills.map(_.universe).mkString(",")}`."
               ).ok
               registerCurrentClassLoader(trackedExecution.execution)
               val succeeded = invokeEntryPoint(entryName, stdout.stream, stderr.stream)
@@ -341,15 +347,46 @@ object ReplExec {
       skill: Skill,
       scalaCode: String,
       cancellationToken: CancellationToken = CancellationToken.Never
+  ): Result[CodeOutput, String] = runCode(builtins, Seq(skill), scalaCode, cancellationToken)
+
+  def runCode(
+      builtins: Skill,
+      selected: Seq[Skill],
+      scalaCode: String,
+      cancellationToken: CancellationToken
   ): Result[CodeOutput, String] = lock.synchronized {
     try
-      ensureCompiled(builtins)
-      if skill.requiresRuntimeClasspath && skill.universe != builtins.universe then ensureCompiled(skill)
-      globalSession.runExpression(builtins, skill, scalaCode, cancellationToken)
+      prepareSkills(builtins, selected).flatMap { skills =>
+        val available = selected ++ Skills.loadAll(os.pwd / "skills") :+ Skills.Basic
+        Skills.resolve(selected.map(_.universe), available, builtins, includeApis = true).flatMap { apis =>
+          globalSession.runExpression(builtins, skills, apis, scalaCode, cancellationToken)
+        }
+      }
     catch
       case scala.util.control.NonFatal(error) => Result.Err(error.toString)
     finally ReplOutputStream.clearBuffer()
   }
+
+  /** Prepare APIs/implementations without invoking capability factories or contacting a provider. */
+  def prepareSkills(builtins: Skill, selected: Seq[Skill]): Result[Vector[Skill], String] =
+    Result.catchException { case error => error.toString } {
+      val available = selected ++ Skills.loadAll(os.pwd / "skills") :+ Skills.Basic
+      Skills.resolve(selected.map(_.universe), available, builtins).map { skills =>
+        compileLock.synchronized {
+          ensureCompiled(builtins)
+          val compileOrder = Skills.resolve(selected.map(_.universe), available, builtins, includeApis = true) match
+            case Result.Ok(value) => value
+            case Result.Err(error) => throw IllegalArgumentException(error)
+          for skill <- compileOrder do
+            val localApis = skill.apiDependencies.filter(name => available.exists(_.universe == name))
+            val dependencyApis = Skills.resolve(skill.requires ++ localApis, available, builtins, includeApis = true) match
+              case Result.Ok(value) => value
+              case Result.Err(error) => throw IllegalArgumentException(error)
+            val _ = compileSkill(skill, dependencyApis)
+        }
+        skills
+      }
+    }.flatMap(identity)
 
   /** Decode each channel independently; stderr output alone does not mean execution failed. */
   def decodeOutput(output: CodeOutput): ScalaToolResult =
@@ -386,9 +423,17 @@ object ReplExec {
       callId: Int,
       log: Logger,
       cancellationToken: CancellationToken = CancellationToken.Never
-  )(using
-      ExecutionContext
-  ): Future[ScalaToolResult] =
+  )(using ExecutionContext): Future[ScalaToolResult] =
+    runCodeHarness(builtins, Seq(skill), scalaCode, callId, log, cancellationToken)
+
+  def runCodeHarness(
+      builtins: Skill,
+      skills: Seq[Skill],
+      scalaCode: String,
+      callId: Int,
+      log: Logger,
+      cancellationToken: CancellationToken
+  )(using ExecutionContext): Future[ScalaToolResult] =
     def strippedAnsi(str: String): String =
       str.replaceAll("\u001B\\[[;\\d]*m", "")
     Future[Result[CodeOutput, String]] {
@@ -401,7 +446,7 @@ object ReplExec {
               s"running tool #$callId",
               shouldUpdate = () => !cancellationToken.isCancelled
             )
-          try runCode(builtins, skill, scalaCode, cancellationToken)
+          try runCode(builtins, skills, scalaCode, cancellationToken)
           finally monitor.close()
       }
     }.transform({ try0 =>
@@ -437,7 +482,9 @@ object ReplExec {
       if values.nonEmpty then
         log.print(s"${color}$channel for code chunk [$callId]:\n${values.map(_.render()).mkString("\n")}${Console.RESET}\n")
 
-  def compileSkill(skill: Skill): os.Path = {
+  def compileSkill(skill: Skill, dependencies: Seq[Skill] = Nil): os.Path = {
+    val dependencyJars = dependencies.map(d => os.pwd / ".agent-runtime/interface" / d.universe / "sigs.jar")
+    val dependencyFlags = dependencyJars.flatMap(path => Seq("--extra-jar", path.toString))
     def digestFrom(strings: String*): String = {
       val hasher = java.security.MessageDigest.getInstance("SHA-256")
       for sourceCode <- strings.filter(_.nonEmpty).map(_.getBytes()) do hasher.update(sourceCode)
@@ -456,7 +503,8 @@ object ReplExec {
     val targetImplJar = outdir / "impl.jar"
     val existingSigs = scala.util.Try(os.read(outdir / "sigs.hash"))
     val digest =
-      digestFrom(ScalaVersion, skill.interface, skill.code, skill.api, skill.predef.getOrElse(""), skill.bindings.toString)
+      digestFrom("safe-api-publish-v1", ScalaVersion, skill.interface, skill.code, skill.api, skill.predef.getOrElse(""), skill.bindings.toString, skill.requires.toString,
+        dependencyJars.map(path => java.util.Base64.getEncoder.encodeToString(os.read.bytes(path))).mkString("|"))
     val shouldWrite = !os.exists(targetSigJar) || !os
       .exists(targetImplJar) || existingSigs.map(_ != digest).getOrElse(true)
     if (shouldWrite) {
@@ -472,7 +520,7 @@ object ReplExec {
           os.write.over(tempInterface, skill.interface)
           withTempFile(tempDir, "sigs.jar") { sigsJar =>
             val _ = os.call(
-              cmd = (
+              cmd = Seq(
                 "scala",
                 "--power",
                 "package",
@@ -481,12 +529,13 @@ object ReplExec {
                 "--library",
                 "-f",
                 "-o",
-                sigsJar,
+                sigsJar.toString,
                 "-language:experimental.safe",
-                tempInterface
-              )
+                tempInterface.toString
+              ) ++ dependencyFlags
             )
             os.copy(sigsJar, targetSigJar, replaceExisting = true)
+            SkillArtifacts.publish(skill, tempInterface)
             withTempFile(tempDir, "Implementation.scala") { tempCode =>
               val (directives, file) = skill.code.linesIterator.toVector.span(line =>
                 line.startsWith("//> using ") || line.trim.isEmpty()
@@ -499,7 +548,7 @@ object ReplExec {
               os.write.over(tempCode, code0)
               withTempFile(tempDir, "impl.jar") { implJar =>
                 val _ = os.call(
-                  cmd = (
+                  cmd = Seq(
                     "scala",
                     "--power",
                     "package",
@@ -508,11 +557,11 @@ object ReplExec {
                     "--library",
                     "-f",
                     "-o",
-                    implJar,
+                    implJar.toString,
                     "--extra-jar",
-                    sigsJar,
-                    tempCode
-                  )
+                    sigsJar.toString,
+                    tempCode.toString
+                  ) ++ dependencyFlags
                 )
                 os.copy(implJar, targetImplJar, replaceExisting = true)
               }

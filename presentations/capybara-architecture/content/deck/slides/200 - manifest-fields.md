@@ -18,7 +18,7 @@ Keep skill `name` and `universe` equal: the cache writes by name, while JAR load
 
 {{stack footer}}
 
-Source: [binding validation](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/SkillScaffold.scala#L5-L15), [JAR loading](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L248-L256)
+Source: [binding validation](assets/source/skill-scaffold.html), [JAR loading](assets/source/repl-exec.html)
 
 {{end-stack}}
 

@@ -1,16 +1,14 @@
-package workshop
+package editing
 
 import scala.language.experimental.captureChecking
 
-/** A fixed summary. The test process cannot return its logs to the model. */
-case class TestSummary(status: String)
-
-trait Coding extends caps.SharedCapability {
+/** Text-file authority supplied by the harness for one workspace. */
+trait TextFiles extends caps.SharedCapability {
+  def list(path: String): Seq[String]
   def read(path: String): String
+  def write(path: String, text: String): Unit
+  /** Replace only when the complete current text equals expected. */
   def replace(path: String, expected: String, next: String): Unit
-  /** Transform approved source with a callback that cannot retain any capability. */
-  def transformSource(f: String -> String): Unit
-  def test(): TestSummary
-  def diff(): String
-  def sandboxChecks(): Seq[String]
+  /** The callback may transform text but cannot retain capabilities. */
+  def edit(path: String)(transform: String -> String): Unit
 }

@@ -13,19 +13,20 @@
       "type": "object",
       "properties": {
         "universe": {"type": "string"},
+        "universes": {"type": "array", "items": {"type": "string"}},
         "scala_code": {"type": "string"}
       },
-      "required": ["universe", "scala_code"]
+      "required": ["scala_code"]
     }
   }
 }
 ```
 
-This minimal schema mirrors `ScalaToolCall`. Capybara derives its real schema and parser from that type. The schema describes arguments; runtime capabilities still control effects.
+Use `universes` for several skills; `universe` remains supported. This schema illustrates `ScalaToolCall`. Capybara derives its real schema and parser from that type. The schema describes arguments; runtime capabilities still control effects.
 
 {{stack footer}}
 
-Source: [schema derivation](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/OllamaClient.scala#L72-L89), [tool argument type](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ScalaAgent.scala#L21-L25), [Function calling guide](https://developers.openai.com/api/docs/guides/function-calling)
+Source: [schema derivation](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/OllamaClient.scala#L72-L89), [tool argument type](assets/source/scala-agent.html), [Function calling guide](https://developers.openai.com/api/docs/guides/function-calling)
 
 {{end-stack}}
 

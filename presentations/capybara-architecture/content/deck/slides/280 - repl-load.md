@@ -24,7 +24,7 @@ Builtins loads first. Its predef is one command with semicolon-separated imports
 
 {{stack footer}}
 
-Source: [complete transcript](assets/source/repl-transcript.html), [runtime sequence](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L248-L300)
+Source: [complete transcript](assets/source/repl-transcript.html), [runtime sequence](assets/source/repl-exec.html)
 
 {{end-stack}}
 

@@ -22,7 +22,7 @@ Open the skill directory in Metals or import its BSP project in IntelliJ. Edit t
 
 {{stack footer}}
 
-Source: [SkillIde.prepare](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/SkillIde.scala#L22-L43)
+Source: [SkillIde.prepare](assets/source/skill-ide.html)
 
 {{end-stack}}
 

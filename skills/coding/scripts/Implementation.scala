@@ -1,87 +1,92 @@
 //> using file Interface.scala
-package workshop.internal
+package editing.internal
 
 import scala.language.experimental.captureChecking
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.Path
-import java.util.Base64
-import java.util.concurrent.{CompletableFuture, TimeUnit}
+import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
+import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
-/** JDK-only adapter: skills load in an isolated classloader, without host dependencies. */
-private class CodingImpl(root: String, node: String, python: String, hostPath: String)
-    extends workshop.Coding {
-  private class PolicyError(code: String) extends IllegalStateException(code)
-  private val errorCodes = Set(
-    "WORKSHOP_NOT_CONFIGURED", "WORKSPACE_CHANGED", "PATH_DENIED", "WRITE_DENIED",
-    "CONTENT_DENIED", "CONTENT_CHANGED", "SANDBOX_UNAVAILABLE", "INVALID_REQUEST",
-    "WORKSHOP_BACKEND_FAILED"
-  )
+/** The trusted implementation supplies file effects; snippets receive only TextFiles. */
+private class TextFilesImpl(workspace: String) extends editing.TextFiles {
+  private val root = Path.of(workspace).toRealPath()
+  private val maximumBytes = 1024 * 1024
+  private class FileError(code: String) extends IllegalStateException(code)
 
-  private def invoke(operation: String, arguments: String*): String =
-    var child: Process | Null = null
-    try
-      if arguments.exists(_.getBytes(UTF_8).length > 16384) then throw PolicyError("CONTENT_DENIED")
-      val helper = Path.of("").toAbsolutePath.resolve("scripts/workshop.py").toString
-      val builder = new ProcessBuilder(python, "-I", "-S", helper,
-        "rpc-lines", "--repo", root, "--node", node)
-      builder.environment().clear()
-      val _ = builder.environment().put("PATH", hostPath)
-      val _ = builder.redirectError(ProcessBuilder.Redirect.DISCARD)
-      val process = builder.start()
-      child = process
-      val reader = CompletableFuture.supplyAsync(() => process.getInputStream.readNBytes(65537))
-      val fields = operation +: arguments.toVector
-      val input = fields.map(s => Base64.getEncoder.encodeToString(s.getBytes(UTF_8))).mkString("", "\n", "\n")
-      val out = process.getOutputStream
-      try out.write(input.getBytes(UTF_8))
-      finally out.close()
-      if !process.waitFor(25, TimeUnit.SECONDS) then throw PolicyError("WORKSHOP_BACKEND_FAILED")
-      val bytes = reader.get(1, TimeUnit.SECONDS)
-      if process.exitValue() != 0 || bytes.length > 65536 then throw PolicyError("WORKSHOP_BACKEND_FAILED")
-      val response = new String(bytes, UTF_8).split("\n", -1)
-      if response.length != 3 || response(2).nonEmpty then throw PolicyError("WORKSHOP_BACKEND_FAILED")
-      if response(0) == "ERROR" then
-        throw PolicyError(if errorCodes(response(1)) then response(1) else "WORKSHOP_BACKEND_FAILED")
-      if response(0) != "OK" then throw PolicyError("WORKSHOP_BACKEND_FAILED")
-      new String(Base64.getDecoder.decode(response(1)), UTF_8)
+  private def checked[A](action: => A): A =
+    try action
     catch
-      case error: PolicyError => throw error
-      case NonFatal(_) => throw PolicyError("WORKSHOP_BACKEND_FAILED")
+      case error: FileError => throw error
+      case NonFatal(_) => throw FileError("FILE_OPERATION_FAILED")
+
+  private def resolve(name: String): Path =
+    val relative = Path.of(name)
+    if relative.isAbsolute || relative.iterator().asScala.exists(_.toString == "..") then
+      throw FileError("PATH_DENIED")
+    val path = root.resolve(relative).normalize()
+    if !path.startsWith(root) then throw FileError("PATH_DENIED")
+    var component = root
+    for part <- root.relativize(path).iterator().asScala do
+      component = component.resolve(part)
+      if Files.isSymbolicLink(component) then throw FileError("PATH_DENIED")
+    path
+
+  private def regular(path: Path): Unit =
+    if !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) then throw FileError("NOT_A_TEXT_FILE")
+
+  def list(path: String): Seq[String] = checked {
+    val directory = resolve(path)
+    val stream = Files.newDirectoryStream(directory)
+    try stream.iterator().asScala.toVector
+      .filterNot(Files.isSymbolicLink(_))
+      .map(root.relativize(_).toString.replace(java.io.File.separatorChar, '/')).sorted
+    finally stream.close()
+  }
+
+  def read(path: String): String = checked {
+    val target = resolve(path)
+    regular(target)
+    val input = Files.newInputStream(target, LinkOption.NOFOLLOW_LINKS)
+    val bytes = try input.readNBytes(maximumBytes + 1) finally input.close()
+    if bytes.length > maximumBytes then throw FileError("FILE_TOO_LARGE")
+    UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString
+  }
+
+  private def store(path: String, text: String): Unit =
+    val bytes = text.getBytes(UTF_8)
+    if bytes.length > maximumBytes then throw FileError("FILE_TOO_LARGE")
+    val target = resolve(path)
+    if target == root then throw FileError("PATH_DENIED")
+    if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then regular(target)
+    val parent = target.getParent
+    if !Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS) then throw FileError("PARENT_NOT_FOUND")
+    val temporary = Files.createTempFile(parent, ".capybara-edit-", ".tmp")
+    try
+      val _ = Files.write(temporary, bytes)
+      if Files.exists(target) && Files.getFileStore(target).supportsFileAttributeView("posix") then
+        val _ = Files.setPosixFilePermissions(temporary,
+          Files.getPosixFilePermissions(target, LinkOption.NOFOLLOW_LINKS))
+      // A new inode avoids modifying another file through a hard-linked destination.
+      val _ = Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
     finally
-      if child != null then
-        val descendants = child.descendants()
-        try descendants.forEach(handle => { val _ = handle.destroyForcibly() })
-        finally descendants.close()
-        val _ = child.destroyForcibly()
+      val _ = Files.deleteIfExists(temporary)
 
-  def read(path: String): String = invoke("read", path)
+  def write(path: String, text: String): Unit = checked { store(path, text) }
 
-  def replace(path: String, expected: String, next: String): Unit =
-    val _ = invoke("replace", path, expected, next)
+  def replace(path: String, expected: String, next: String): Unit = checked {
+    if read(path) != expected then throw FileError("CONTENT_CHANGED")
+    store(path, next)
+  }
 
-  def transformSource(f: String -> String): Unit =
-    val before = read("src/word-count.mjs")
-    replace("src/word-count.mjs", before, f(before))
-
-  def test(): workshop.TestSummary =
-    val status = invoke("test")
-    if !Set("passed", "failed", "timeout")(status) then throw PolicyError("WORKSHOP_BACKEND_FAILED")
-    workshop.TestSummary(status)
-
-  def diff(): String = invoke("diff")
-
-  def sandboxChecks(): Seq[String] = invoke("checks").split(",").toVector
+  def edit(path: String)(transform: String -> String): Unit =
+    val before = read(path)
+    replace(path, before, transform(before))
 }
 
 @caps.rejectSafe
-def impl(): workshop.Coding =
-  val root = sys.env.getOrElse("CAPYBARA_WORKSHOP_ROOT",
-    throw IllegalStateException("WORKSHOP_NOT_CONFIGURED"))
-  configured(root, sys.env.getOrElse("CAPYBARA_WORKSHOP_NODE", "node"),
-    sys.env.getOrElse("CAPYBARA_WORKSHOP_PYTHON", "/usr/bin/python3"))
+def impl(): editing.TextFiles =
+  configured(sys.env.getOrElse("CAPYBARA_CODING_ROOT", Path.of("").toAbsolutePath.toString))
 
-/** Explicit trusted wiring for integration tests and embedding. */
+/** Only trusted harness wiring can select the workspace. */
 @caps.rejectSafe
-def configured(root: String, node: String, python: String): workshop.Coding =
-  new CodingImpl(root, node, python, sys.env.getOrElse("PATH", "/usr/bin:/bin"))
+def configured(root: String): editing.TextFiles = new TextFilesImpl(root)

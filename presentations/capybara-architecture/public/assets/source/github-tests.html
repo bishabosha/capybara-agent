@@ -1,0 +1,194 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>test/src/GitHubSkillSuite.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>test/src/GitHubSkillSuite.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import steps.result.Result</code></li>
+<li id='L4'><code>import com.sun.net.httpserver.HttpServer</code></li>
+<li id='L5'><code>import java.net.InetSocketAddress</code></li>
+<li id='L6'><code>import java.nio.charset.StandardCharsets.UTF_8</code></li>
+<li id='L7'><code></code></li>
+<li id='L8'><code>/** Real Scala HTTP transport and safe skill composition, with a deterministic local GitHub server. */</code></li>
+<li id='L9'><code>class GitHubSkillSuite extends munit.FunSuite:</code></li>
+<li id='L10'><code>  override val munitTimeout = scala.concurrent.duration.Duration(180, "s")</code></li>
+<li id='L11'><code>  private val token = "SYNTHETIC_HOST_TOKEN_abcdefghijklmnopqrstuvwxyz"</code></li>
+<li id='L12'><code>  private val initial = "1" * 40</code></li>
+<li id='L13'><code>  private val tree = "2" * 40</code></li>
+<li id='L14'><code>  private val committed = "3" * 40</code></li>
+<li id='L15'><code>  private def loaded(path: String): Skill = Skills.loadFrom(os.pwd / os.RelPath(path)) match</code></li>
+<li id='L16'><code>    case Result.Ok(value) =&gt; value</code></li>
+<li id='L17'><code>    case Result.Err(error) =&gt; fail(error)</code></li>
+<li id='L18'><code>  private lazy val builtins = loaded("builtin-skills/capybara-builtins")</code></li>
+<li id='L19'><code></code></li>
+<li id='L20'><code>  private class Remote extends AutoCloseable:</code></li>
+<li id='L21'><code>    val refs = scala.collection.mutable.Map("main" -&gt; initial)</code></li>
+<li id='L22'><code>    val requests = scala.collection.mutable.ArrayBuffer.empty[(String, String, ujson.Value)]</code></li>
+<li id='L23'><code>    val pulls = scala.collection.mutable.ArrayBuffer.empty[ujson.Value]</code></li>
+<li id='L24'><code>    var secretIssue = false</code></li>
+<li id='L25'><code>    var successChecks = false</code></li>
+<li id='L26'><code>    val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)</code></li>
+<li id='L27'><code>    server.createContext("/repos/example/lab", exchange =&gt; {</code></li>
+<li id='L28'><code>      try</code></li>
+<li id='L29'><code>        assertEquals(exchange.getRequestHeaders.getFirst("Authorization"), "Bearer " + token)</code></li>
+<li id='L30'><code>        val method = exchange.getRequestMethod</code></li>
+<li id='L31'><code>        val path = exchange.getRequestURI.getPath.stripPrefix("/repos/example/lab")</code></li>
+<li id='L32'><code>        val raw = new String(exchange.getRequestBody.readAllBytes(), UTF_8)</code></li>
+<li id='L33'><code>        val body = if raw.isEmpty then ujson.Null else ujson.read(raw)</code></li>
+<li id='L34'><code>        requests.synchronized { val _ = requests += ((method, path, body)) }</code></li>
+<li id='L35'><code>        val issue = ujson.Obj("number" -&gt; 1, "title" -&gt; "Fix whitespace λ", "body" -&gt;</code></li>
+<li id='L36'><code>          (if secretIssue then token else "Handle empty input, repeated spaces and \\t."))</code></li>
+<li id='L37'><code>        val (status, result) = (method, path) match</code></li>
+<li id='L38'><code>          case ("GET", "/issues") =&gt; (200, ujson.Arr(issue))</code></li>
+<li id='L39'><code>          case ("GET", "/issues/1") =&gt; (200, issue)</code></li>
+<li id='L40'><code>          case ("GET", p) if p.startsWith("/git/ref/heads/") =&gt;</code></li>
+<li id='L41'><code>            refs.get(p.stripPrefix("/git/ref/heads/")) match</code></li>
+<li id='L42'><code>              case Some(sha) =&gt; (200, ujson.Obj("object" -&gt; ujson.Obj("sha" -&gt; sha)))</code></li>
+<li id='L43'><code>              case None =&gt; (404, ujson.Obj("message" -&gt; token))</code></li>
+<li id='L44'><code>          case ("POST", "/git/refs") =&gt;</code></li>
+<li id='L45'><code>            val name = body("ref").str.stripPrefix("refs/heads/")</code></li>
+<li id='L46'><code>            if refs.contains(name) then (422, ujson.Obj("message" -&gt; token))</code></li>
+<li id='L47'><code>            else</code></li>
+<li id='L48'><code>              refs(name) = body("sha").str</code></li>
+<li id='L49'><code>              (201, ujson.Obj("object" -&gt; ujson.Obj("sha" -&gt; body("sha"))))</code></li>
+<li id='L50'><code>          case ("GET", p) if p.startsWith("/git/commits/") =&gt;</code></li>
+<li id='L51'><code>            (200, ujson.Obj("tree" -&gt; ujson.Obj("sha" -&gt; tree)))</code></li>
+<li id='L52'><code>          case ("POST", "/git/trees") =&gt; (201, ujson.Obj("sha" -&gt; tree))</code></li>
+<li id='L53'><code>          case ("POST", "/git/commits") =&gt; (201, ujson.Obj("sha" -&gt; committed))</code></li>
+<li id='L54'><code>          case ("PATCH", p) if p.startsWith("/git/refs/heads/") =&gt;</code></li>
+<li id='L55'><code>            assert(!body("force").bool)</code></li>
+<li id='L56'><code>            refs(p.stripPrefix("/git/refs/heads/")) = body("sha").str</code></li>
+<li id='L57'><code>            (200, ujson.Obj("object" -&gt; ujson.Obj("sha" -&gt; body("sha"))))</code></li>
+<li id='L58'><code>          case ("GET", "/pulls") =&gt; (200, ujson.Arr.from(pulls))</code></li>
+<li id='L59'><code>          case ("POST", "/pulls") =&gt;</code></li>
+<li id='L60'><code>            assert(body("draft").bool)</code></li>
+<li id='L61'><code>            val item = ujson.Obj("number" -&gt; 2, "draft" -&gt; true,</code></li>
+<li id='L62'><code>              "head" -&gt; ujson.Obj("ref" -&gt; body("head"), "sha" -&gt; committed,</code></li>
+<li id='L63'><code>                "repo" -&gt; ujson.Obj("full_name" -&gt; "example/lab")),</code></li>
+<li id='L64'><code>              "base" -&gt; ujson.Obj("ref" -&gt; "main"))</code></li>
+<li id='L65'><code>            pulls += item</code></li>
+<li id='L66'><code>            (201, item)</code></li>
+<li id='L67'><code>          case ("GET", p) if p.endsWith("/status") =&gt;</code></li>
+<li id='L68'><code>            (200, ujson.Obj("state" -&gt; "pending", "total_count" -&gt; 0))</code></li>
+<li id='L69'><code>          case ("GET", p) if p.endsWith("/check-runs") =&gt;</code></li>
+<li id='L70'><code>            val runs = if successChecks then Seq(ujson.Obj("head_sha" -&gt; committed,</code></li>
+<li id='L71'><code>              "status" -&gt; "completed", "conclusion" -&gt; "success")) else Nil</code></li>
+<li id='L72'><code>            (200, ujson.Obj("total_count" -&gt; runs.size, "check_runs" -&gt; ujson.Arr.from(runs)))</code></li>
+<li id='L73'><code>          case _ =&gt; (500, ujson.Obj("message" -&gt; token))</code></li>
+<li id='L74'><code>        val data = ujson.write(result).getBytes(UTF_8)</code></li>
+<li id='L75'><code>        exchange.getResponseHeaders.set("Content-Type", "application/json")</code></li>
+<li id='L76'><code>        exchange.sendResponseHeaders(status, data.length.toLong)</code></li>
+<li id='L77'><code>        exchange.getResponseBody.write(data)</code></li>
+<li id='L78'><code>      finally exchange.close()</code></li>
+<li id='L79'><code>    })</code></li>
+<li id='L80'><code>    server.start()</code></li>
+<li id='L81'><code>    val endpoint = s"http://127.0.0.1:${server.getAddress.getPort}"</code></li>
+<li id='L82'><code>    def close(): Unit = server.stop(0)</code></li>
+<li id='L83'><code></code></li>
+<li id='L84'><code>  private def withSkills(test: (Seq[Skill], os.Path, Remote) =&gt; Unit): Unit =</code></li>
+<li id='L85'><code>    val root = os.temp.dir(prefix = "capybara-github-composed-")</code></li>
+<li id='L86'><code>    val remote = new Remote</code></li>
+<li id='L87'><code>    try</code></li>
+<li id='L88'><code>      os.makeDir.all(root / "src")</code></li>
+<li id='L89'><code>      os.write(root / "src/word-count.mjs", "export function countWords(text) {\n  return text.split(' ').length;\n}\n")</code></li>
+<li id='L90'><code>      val coding = loaded("skills/coding")</code></li>
+<li id='L91'><code>      val local = coding.copy(bindings = coding.bindings.map(b =&gt;</code></li>
+<li id='L92'><code>        (name = b.name, tpe = b.tpe, value = s"editing.internal.configured(${ujson.write(root.toString)})")))</code></li>
+<li id='L93'><code>      val github = loaded("skills/github")</code></li>
+<li id='L94'><code>      val factory = s"githubskill.internal.configured(\"example/lab\", \"main\", ${ujson.write(token)}, ${ujson.write(remote.endpoint)})"</code></li>
+<li id='L95'><code>      val online = github.copy(bindings = github.bindings.map(b =&gt; (name = b.name, tpe = b.tpe, value = factory)))</code></li>
+<li id='L96'><code>      assertEquals(online.requires, Seq("coding"))</code></li>
+<li id='L97'><code>      test(Seq(online, local), root, remote)</code></li>
+<li id='L98'><code>    finally</code></li>
+<li id='L99'><code>      remote.close()</code></li>
+<li id='L100'><code>      os.remove.all(root)</code></li>
+<li id='L101'><code></code></li>
+<li id='L102'><code>  private def run(skills: Seq[Skill], code: String): ReplExec.CodeOutput =</code></li>
+<li id='L103'><code>    ReplExec.runCode(builtins, skills, code, CancellationToken.Never) match</code></li>
+<li id='L104'><code>      case Result.Ok(value) =&gt;</code></li>
+<li id='L105'><code>        assert(!value.stdout.contains(token))</code></li>
+<li id='L106'><code>        assert(!value.stderr.contains(token))</code></li>
+<li id='L107'><code>        value</code></li>
+<li id='L108'><code>      case Result.Err(error) =&gt; fail(error)</code></li>
+<li id='L109'><code></code></li>
+<li id='L110'><code>  test("composed coding and GitHub skills implement, commit, push and create a draft PR without a process runner") {</code></li>
+<li id='L111'><code>    withSkills { (skills, root, remote) =&gt;</code></li>
+<li id='L112'><code>      val output = SkillRunFixture.run(skills, os.pwd / "examples/snippets/github-lab.scala")</code></li>
+<li id='L113'><code>      assert(!output.failed, output.stderr)</code></li>
+<li id='L114'><code>      assert(os.read(root / "src/word-count.mjs").contains("clean.split(/\\s+/u)"))</code></li>
+<li id='L115'><code>      val values = output.stdout.linesIterator.map(ujson.read(_)("special.success")).toVector</code></li>
+<li id='L116'><code>      assertEquals(values(0)("title").str, "Fix whitespace λ")</code></li>
+<li id='L117'><code>      assertEquals(values(2)("url").str, "https://github.com/example/lab/pull/2")</code></li>
+<li id='L118'><code>      assertEquals(values(3)("status").str, "pending")</code></li>
+<li id='L119'><code>      assertEquals(remote.pulls.size, 1)</code></li>
+<li id='L120'><code>      if os.exists(os.pwd / ".agent-runtime/validate-presentation") then</code></li>
+<li id='L121'><code>        os.write.over(os.pwd / "presentations/capybara-architecture/public/assets/github-demo.txt", output.stdout)</code></li>
+<li id='L122'><code>      assert(!output.stdout.contains(token))</code></li>
+<li id='L123'><code>      assertEquals(remote.refs("main"), initial)</code></li>
+<li id='L124'><code>      val patch = remote.requests.find(_._2 == "/git/trees").get._3</code></li>
+<li id='L125'><code>      assertEquals(patch("tree")(0)("path").str, "src/word-count.mjs")</code></li>
+<li id='L126'><code>      assert(!ujson.write(patch).contains(token))</code></li>
+<li id='L127'><code>      val retry = run(skills, "puts(github.createPullRequest(github.branch(\"capybara/issue-1\"), \"Fix\", \"Fixes #1\"))")</code></li>
+<li id='L128'><code>      assert(!retry.failed, retry.stderr)</code></li>
+<li id='L129'><code>      assertEquals(remote.pulls.size, 1)</code></li>
+<li id='L130'><code>      remote.successChecks = true</code></li>
+<li id='L131'><code>      val checked = run(skills, "puts(github.checks(github.branch(\"capybara/issue-1\")))")</code></li>
+<li id='L132'><code>      assert(!checked.failed, checked.stderr)</code></li>
+<li id='L133'><code>      assertEquals(ujson.read(checked.stdout)("special.success")("status").str, "passed")</code></li>
+<li id='L134'><code>    }</code></li>
+<li id='L135'><code>  }</code></li>
+<li id='L136'><code></code></li>
+<li id='L137'><code>  test("capture checking rejects cross-skill effects and credentials have no public access path") {</code></li>
+<li id='L138'><code>    withSkills { (skills, _, _) =&gt;</code></li>
+<li id='L139'><code>      assert(!run(skills, "puts(1)").failed)</code></li>
+<li id='L140'><code>      for code &lt;- Seq(</code></li>
+<li id='L141'><code>        os.read(os.pwd / "examples/snippets/github-hidden-files.scala"),</code></li>
+<li id='L142'><code>        "coding.edit(\"src/word-count.mjs\")(text =&gt; { puts(text); text })",</code></li>
+<li id='L143'><code>        "coding.edit(\"src/word-count.mjs\")(text =&gt; github.lookupIssue(1).body)",</code></li>
+<li id='L144'><code>        "puts(github.token)", "github.test()", "githubskill.internal.impl()",</code></li>
+<li id='L145'><code>        "puts(sys.env(\"CAPYBARA_GITHUB_TOKEN\"))",</code></li>
+<li id='L146'><code>        "puts(github.getClass.getDeclaredFields.toList)",</code></li>
+<li id='L147'><code>        "new java.lang.ProcessBuilder(\"env\").start()"</code></li>
+<li id='L148'><code>      ) do assert(ReplExec.runCode(builtins, skills, code, CancellationToken.Never).isInstanceOf[Result.Err[?]], code)</code></li>
+<li id='L149'><code>    }</code></li>
+<li id='L150'><code>  }</code></li>
+<li id='L151'><code></code></li>
+<li id='L152'><code>  test("GitHub file access requires TextFiles in its public safe method context") {</code></li>
+<li id='L153'><code>    withSkills { (skills, root, remote) =&gt;</code></li>
+<li id='L154'><code>      // Selecting GitHub alone resolves the manifest's required context.</code></li>
+<li id='L155'><code>      assert(!run(Seq(skills.head), "val files = summon[editing.TextFiles]; puts(1)").failed)</code></li>
+<li id='L156'><code>      // Keep the API dependency, but remove the automatic runtime file grant.</code></li>
+<li id='L157'><code>      val githubOnly = Seq(skills.head.copy(requires = Nil))</code></li>
+<li id='L158'><code>      assert(!run(githubOnly, "puts(github.lookupIssue(1))").failed)</code></li>
+<li id='L159'><code>      val rejected = ReplExec.runCode(builtins, githubOnly,</code></li>
+<li id='L160'><code>        "github.commit(githubskill.Branch(\"capybara/issue-1\", \"" + initial + "\"), \"Fix\", Seq(\"src/word-count.mjs\"))",</code></li>
+<li id='L161'><code>        CancellationToken.Never)</code></li>
+<li id='L162'><code>      rejected match</code></li>
+<li id='L163'><code>        case Result.Err(error) =&gt; assert(error.contains("TextFiles"), error)</code></li>
+<li id='L164'><code>        case Result.Ok(value) =&gt; fail("Commit compiled without file authority: " + value)</code></li>
+<li id='L165'><code>      assertEquals(remote.requests.count(_._1 != "GET"), 0)</code></li>
+<li id='L166'><code>      assert(os.read(root / "src/word-count.mjs").contains("text.split"))</code></li>
+<li id='L167'><code>    }</code></li>
+<li id='L168'><code>  }</code></li>
+<li id='L169'><code></code></li>
+<li id='L170'><code>  test("secret-bearing issues, files and PR metadata are rejected without returning credentials") {</code></li>
+<li id='L171'><code>    withSkills { (skills, root, remote) =&gt;</code></li>
+<li id='L172'><code>      remote.secretIssue = true</code></li>
+<li id='L173'><code>      val issue = run(skills, "github.lookupIssue(1)")</code></li>
+<li id='L174'><code>      assert(issue.failed &amp;&amp; issue.stderr.contains("CONTENT_DENIED"))</code></li>
+<li id='L175'><code>      remote.secretIssue = false</code></li>
+<li id='L176'><code>      val create = run(skills, "puts(github.createBranch(\"capybara/issue-1\"))")</code></li>
+<li id='L177'><code>      assert(!create.failed, create.stderr)</code></li>
+<li id='L178'><code>      os.write(root / "leak.txt", token)</code></li>
+<li id='L179'><code>      val before = remote.requests.count(_._1 != "GET")</code></li>
+<li id='L180'><code>      val leak = run(skills, "github.commit(github.branch(\"capybara/issue-1\"), \"Fix\", Seq(\"leak.txt\"))")</code></li>
+<li id='L181'><code>      assert(leak.failed &amp;&amp; leak.stderr.contains("CONTENT_DENIED"))</code></li>
+<li id='L182'><code>      assertEquals(remote.requests.count(_._1 != "GET"), before)</code></li>
+<li id='L183'><code>      val metadata = run(skills, s"github.createPullRequest(github.branch(\"capybara/issue-1\"), \"Fix\", ${ujson.write(token)})")</code></li>
+<li id='L184'><code>      assert(metadata.failed &amp;&amp; metadata.stderr.contains("CONTENT_DENIED"))</code></li>
+<li id='L185'><code>      assertEquals(remote.requests.count(_._1 != "GET"), before)</code></li>
+<li id='L186'><code>      val denied = run(skills, "github.createBranch(\"main\")")</code></li>
+<li id='L187'><code>      assert(denied.failed &amp;&amp; denied.stderr.contains("INVALID_BRANCH"))</code></li>
+<li id='L188'><code>      val error = run(skills, "github.branch(\"capybara/missing\")")</code></li>
+<li id='L189'><code>      assert(error.failed &amp;&amp; error.stderr.contains("NOT_FOUND"))</code></li>
+<li id='L190'><code>    }</code></li>
+<li id='L191'><code>  }</code></li></ol></html>

@@ -20,7 +20,9 @@ import ReplExec.ScalaToolResult
 
 object ScalaAgent {
 
-  type ScalaToolCall = (universe: String, scala_code: String)
+  case class ScalaToolCall(universe: String = "basic", scala_code: String, universes: Seq[String] = Nil) derives ReadWriter:
+    def requestedUniverses: Seq[String] =
+      if universes.nonEmpty then universes else universe.split(",").map(_.trim).filter(_.nonEmpty).toSeq
   type ScalaResolvedChunk = ResolvedChunk[ScalaToolCall, ScalaToolResult]
   final case class AgentResponse(chunks: Seq[ScalaResolvedChunk], usage: OllamaClient.Usage)
   private type RawScalaChunk = (Int, Chunk[ScalaToolCall])
@@ -88,7 +90,10 @@ object ScalaAgent {
         |Choose `basic` for calculations, string/list/map transformations, JSON-like data shaping with standard collections, date/time arithmetic, sorting, filtering, and similar local reasoning.
         |Use a skill-specific universe only when the task needs the API described for that universe.
         |Do not choose a skill-specific universe just because the user mentions a path, filename, URL, or command as plain text; choose it only when you must interact with that external resource.
-        |Each universe expects its own calling convention.
+        |Each skill expects its own calling convention.
+        |For a composed call, supply universes = ["coding", "github"]. The legacy universe field still selects one skill.
+        |Declared requires dependencies are loaded automatically, with their safe APIs and separate capabilities.
+        |Skills remain atomic; composing them does not permit retaining capabilities in a pure callback.
         |
         |### Structured Output (available in every universe):
         |${builtinSkill.api}
@@ -166,7 +171,7 @@ object ScalaAgent {
           scalaCommands: Map[Int, Promise[ScalaToolResult]]
       )
     ]()
-    val chunker = new ChunkOutput.ChunkReader[Chunk[(universe: String, scala_code: String)]]() {
+    val chunker = new ChunkOutput.ChunkReader[Chunk[ScalaToolCall]]() {
       private val startedAtNanos = System.nanoTime()
       private val lastStatusAtNanos = new java.util.concurrent.atomic.AtomicLong(0L)
       private val receivedChunks = new java.util.concurrent.atomic.AtomicInteger(0)
@@ -177,7 +182,7 @@ object ScalaAgent {
           (
               Int,
               Chunk[
-                (universe: String, scala_code: String)
+                ScalaToolCall
               ]
           )
         ]()
@@ -229,7 +234,7 @@ object ScalaAgent {
 
       updateStatus("waiting", force = true)
 
-      override def onChunk(chunk: Chunk[(universe: String, scala_code: String)]): Unit =
+      override def onChunk(chunk: Chunk[ScalaToolCall]): Unit =
         seenAny.set(true)
         var chunkId = -1
         chunk match {
@@ -264,26 +269,22 @@ object ScalaAgent {
                 updateStatus("tool promise completed", force = true)
               }
               val result =
-                availableSkills.find(_.universe == scalaCode.arguments.universe) match
-                  case Some(skill) =>
+                Skills.resolve(scalaCode.arguments.requestedUniverses, availableSkills, builtinSkill) match
+                  case Result.Ok(skills) =>
                     ReplExec
                       .runCodeHarness(
                         builtinSkill,
-                        skill,
+                        skills,
                         scalaCode.arguments.scala_code,
                         callId,
                         log,
                         cancellationToken
                       )
-                  case None =>
-                    Future.successful(
-                      ScalaToolResult.Failure(
-                        s"Universe not found: ${scalaCode.arguments.universe}"
-                      )
-                    )
+                  case Result.Err(error) =>
+                    Future.successful(ScalaToolResult.Failure(error))
               promise.tryCompleteWith(result)
               log.print(
-                s"${Console.YELLOW}${scalaCode.name}[${scalaCode.arguments.universe}]:${Console.RESET}\n"
+                s"${Console.YELLOW}${scalaCode.name}[${scalaCode.arguments.requestedUniverses.mkString(",")}]:${Console.RESET}\n"
               )
               log.print(
                 s"${Console.YELLOW}```scala${Console.RESET}\n"

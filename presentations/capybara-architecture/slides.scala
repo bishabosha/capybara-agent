@@ -17,13 +17,35 @@ private def prepareSourceLinks(root: os.Path): Unit =
     "coding-interface" -> "skills/coding/scripts/Interface.scala",
     "coding-implementation" -> "skills/coding/scripts/Implementation.scala",
     "coding-manifest" -> "skills/coding/scripts/Manifest.scala",
-    "workshop-backend" -> "scripts/workshop.py",
-    "workshop-tests" -> "scripts/test_workshop.py",
+    "github-interface" -> "skills/github/scripts/Interface.scala",
+    "github-implementation" -> "skills/github/scripts/Implementation.scala",
+    "github-manifest" -> "skills/github/scripts/Manifest.scala",
+    "github-tests" -> "test/src/GitHubSkillSuite.scala",
+    "composition-tests" -> "test/src/SkillCompositionSuite.scala",
+    "repl-exec" -> "src/ReplExec.scala",
+    "skill-scaffold" -> "src/SkillScaffold.scala",
+    "skill-artifacts" -> "src/SkillArtifacts.scala",
+    "skills-loader" -> "src/Skills.scala",
+    "scala-agent" -> "src/ScalaAgent.scala",
+    "skill-ide" -> "src/SkillIde.scala",
+    "skill-runner" -> "src/SkillRunner.scala",
+    "workshop-setup" -> "src/WorkshopSetup.scala",
+    "github-guide" -> "skills/github/README.md",
+    "github-snippet" -> "examples/snippets/github-lab.scala",
     "integration-tests" -> "test/src/WorkshopSuite.scala",
     "skill-transcript" -> "src/SkillTranscript.scala",
-    "coding-snippet" -> "examples/snippets/coding.scala"
-  ).map { (name, path) => (name, path, os.read(repository / os.RelPath(path))) } :+
-    ("repl-transcript", "Generated REPL command transcript", os.read(root / "public/assets/repl-transcript.txt"))
+    "cli-fixtures" -> "test/src/SkillRunFixture.scala",
+    "coding-snippet" -> "examples/snippets/coding.scala",
+    "coding-demo-runner" -> "src/CodingDemo.scala"
+  ).map { (name, path) => (name, path, os.read(repository / os.RelPath(path))) } ++ Seq(
+    ("repl-transcript", "Generated REPL command transcript", os.read(root / "public/assets/repl-transcript.txt")),
+    ("coding-demo", "Recorded ordinary coding skill-run stdout", os.read(root / "public/assets/coding-demo.txt")),
+    ("github-demo", "Recorded ordinary GitHub skill-run stdout (local HTTP fixture)", os.read(root / "public/assets/github-demo.txt")),
+    ("github-repl-transcript", "Generated GitHub commit REPL transcript", os.read(root / "public/assets/github-repl-transcript.txt")),
+    ("github-demo-transcript", "Generated full GitHub demo REPL transcript", os.read(root / "public/assets/github-demo-transcript.txt")),
+    ("capture-examples", "Rejected capability captures", Seq("coding-capture-output.scala", "github-capture-in-edit.scala", "github-hidden-files.scala")
+      .map(name => s"// examples/snippets/$name\n" + os.read(repository / "examples/snippets" / name)).mkString("\n"))
+  )
   def escape(value: String): String = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
   for (name, title, text) <- files do
     val lines = text.linesIterator.zipWithIndex.map { (line, i) =>

@@ -52,9 +52,9 @@ flowchart TD
 
 The session loop keeps conversation history across interactive turns and makes up
 to 16 model requests per turn. `ScalaAgent` exposes a single tool,
-`run_scala_code`, whose `universe` selects the basic Scala/Java environment or a
-loaded skill. `ReplExec` loads baseline builtins plus any selected skill's JARs
-and predefs, then resets the REPL state after each execution. Tool results return
+`run_scala_code`, whose `universe` selects a single skill, or whose `universes` array selects
+several atomic skills and their safe API dependencies. `ReplExec` loads baseline builtins plus any selected skill's JARs
+and predefs in dependency order, then resets the REPL after each execution. Tool results return
 to the model as conversation messages; streamed output goes to the logger.
 
 ## How skills work
@@ -185,12 +185,13 @@ def snippet(using output: builtins.OutputStreams, filesystem: fs.Filesystem): Un
 
 // Compiled as trusted harness wiring, then called with the harness's streams:
 def invoke(__harnessStdout: java.io.PrintStream, __harnessStderr: java.io.PrintStream): Boolean = {
-  val output = builtins.outputStreams(__harnessStdout, __harnessStderr)
-  val filesystem = fs.internal.impl()
-  try { snippet(using output, filesystem); true }
+  given __capybara_output: builtins.OutputStreams =
+    builtins.outputStreams(__harnessStdout, __harnessStderr)
+  given __capybara_filesystem: fs.Filesystem = fs.internal.impl()
+  try { snippet(using __capybara_output, __capybara_filesystem); true }
   catch {
     case scala.util.control.NonFatal(error) =>
-      output.printErr(builtins.baseReflectiveShowable(error))
+      __capybara_output.printErr(builtins.baseReflectiveShowable(error))
       false
   }
 }
@@ -271,53 +272,114 @@ Runtime failures add `executionError` while retaining both output arrays.
 Silent success has empty stdout and stderr arrays and displays no result. The
 system prompt explains the separate channels and supplied output capability.
 
-## Runnable coding workshop
+## Generic coding tools and demo
 
-The `coding` skill can read, edit and test the bundled word-count GitHub exercise.
-Initialize a dedicated source-only repository before starting the agent:
-
-```sh
-python3 scripts/workshop.py init --repo /tmp/capybara-word-count-lab
-export CAPYBARA_WORKSHOP_ROOT=/tmp/capybara-word-count-lab
-export CAPYBARA_WORKSHOP_NODE="$(command -v node)"
-./mill run skill-run --skill skills/coding --file examples/snippets/coding.scala
-```
-
-The complete snippet uses a capture-checked pure source transformation, runs
-the failing baseline and fixed tests, and prints a one-file diff. macOS,
-Python 3 and native Node 20+ are required for this particular exercise.
-Tests use a credential-free, read-only snapshot under `sandbox-exec`; unsupported
-environments fail closed. GitHub publishing stays in a separate human terminal.
-See [the workshop guide](presentations/capybara-architecture/workshop/README.md)
-for the agent prompt, GitHub setup, capture-checking exercises and exact policies.
-
-To inspect generated commands for one tool call without executing it:
+The `coding` skill supplies workspace-relative `list`, `read`, `write`, `replace`
+and `edit` operations for UTF-8 text files. Its interface and the safe harness
+control effects; `edit(path)(String -> String)` rejects callbacks that retain
+output or another capability. It has no project-specific filenames, external
+runtime, test runner or process sandbox.
 
 ```sh
-./mill run skill-transcript --skill skills/filesystem --file examples/snippets/transcript-filesystem.scala
+./mill run workshop-setup
+. .agent-runtime/demo-workspaces/coding.env
+./mill run skill-run --skill coding --file examples/snippets/coding.scala
 ```
+
+`workshop-setup` copies both tracked starters into local workspaces, builds the
+skills and prints the next commands. It keeps existing participant edits on
+repeat runs. The generated `.env` files contain only the workspace path.
+For a fresh session, use `--directory .agent-runtime/another-workshop` and source
+the environment file printed by setup.
+
+The ordinary snippet lists files, edits Scala source and creates a text file.
+Run `examples/snippets/coding-capture-output.scala` separately to see a
+capture-checking rejection. No model or credentials are required.
+
+For your own project, set `CAPYBARA_CODING_ROOT` before starting the agent or
+running a snippet:
+
+```sh
+export CAPYBARA_CODING_ROOT=/absolute/path/to/project
+./mill run skill-ide --skill skills/coding
+./mill run skill-run --skill skills/coding --file /path/to/snippet.scala
+```
+
+The default workspace is the current directory. See
+[the coding skill guide](skills/coding/README.md) and
+[the capture-checking workshop](presentations/capybara-architecture/workshop/README.md).
+The generic editor returns ordinary printable file contents; it does not
+classify them as secrets. Credential-bearing operations belong in separate
+trusted capabilities, such as the GitHub skill below.
+
+To inspect generated commands without executing a snippet:
+
+```sh
+./mill run skill-transcript --skill skills/coding --file /path/to/snippet.scala
+```
+
+## Composing atomic skills
+
+A tool call can select several skills using `universes: ["coding", "github"]`.
+The legacy `universe` field still works for single-skill calls. The harness
+resolves dependencies, rejects cycles and binding conflicts, compiles safe APIs
+in dependency order, loads each skill once, and injects separate contextual
+capability parameters into one safe method.
+
+Skills import each other's locally published interfaces with Scala CLI directives:
+
+```scala
+//> using repository ivy2local
+//> using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"
+```
+
+Publish explicitly with a name or directory (dependencies are published first):
+
+```sh
+./mill run skill-publish --skill coding
+./mill run skill-publish --skill skills/github
+```
+
+The command prints ready-to-copy Scala CLI dependency directives. It refreshes
+local Ivy without constructing capabilities, reading host credentials or running
+a snippet. It publishes safe API artifacts, not an installable implementation
+bundle. Runtime skills still come from installed skill directories.
+
+Only checked interface artifacts are published under `dev.capybara.skills`.
+Implementation factories remain separate, marked `rejectSafe`, and are called
+by trusted harness wiring. An API dependency does not contain credentials or
+implementation classes. Source directives determine the API compilation graph.
+The separate manifest field `requires = Vector("coding")` determines which
+runtime contexts are supplied automatically. GitHub's public `commit` method
+declares `(using files: editing.TextFiles)`; the caller supplies file authority.
+The GitHub factory does not capture that authority.
+
+```sh
+./mill run skill-run --skill coding,github --file /path/to/workflow.scala
+./mill run skill-transcript --skill coding,github --file /path/to/workflow.scala
+```
+
+`SkillCompositionSuite` validates actual local publication, typed delegation,
+dependency ordering and cross-skill capture-checking failures through MCP.
 
 ## GitHub issue-to-PR workflow
 
-The `github` universe implements issue lookup, approved source edits, sandboxed
-tests, topic-branch publication and draft PR creation through GitHub's REST API.
-The host fixes the repository and file policy; credentials stay in trusted
-wiring. Pure transformations reject captured capabilities. Publication checks
-outgoing content, an exact-snapshot test receipt and the expected remote heads.
+`github` supplies issue, branch, commit/push, draft PR and CI operations.
+It delegates file reads to `coding` through its safe API. Editing remains in
+`coding`; neither interface launches processes or a sandbox. Both implementations
+are Scala-native, with no Python or Node dependency.
 
-See [the GitHub skill setup and runnable example](skills/github/README.md).
-Configure `CAPYBARA_GITHUB_PROFILE` and the host-only `CAPYBARA_GITHUB_TOKEN`, then:
+Configure `CAPYBARA_CODING_ROOT`, `CAPYBARA_GITHUB_REPOSITORY`, and the host-only
+`CAPYBARA_GITHUB_TOKEN`, then follow [the GitHub guide](skills/github/README.md):
 
 ```sh
-./mill run skill-run --skill skills/github --file examples/snippets/github-lab.scala
+./mill run skill-run --skill coding,github --file examples/snippets/github-lab.scala
 ```
 
-This command performs real branch/PR writes for the configured repository. The
-example assumes issue #1 and the pristine word-count starter. GitHub operations
-are repository-independent; the included local test runner supports macOS/Node.
-The default policy refuses publication without a passing test of the current
-snapshot. `GitHubSkillSuite`, run through MCP, validates the complete workflow
-with a deterministic GitHub transport and real safe compiler/process sandbox.
+The example expects a local word-count starter clone and issue #1. It performs
+real branch/PR writes with production wiring. The host token has no public
+getter; outgoing content is checked before publication. `GitHubSkillSuite` tests
+the full composed workflow with a local HTTP fixture and synthetic credentials.
 
 ## Model providers
 

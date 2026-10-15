@@ -17,10 +17,10 @@
 
 {{stack footer}}
 
-Source: [interactive history and cancellation](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/scalaAgentDemo.scala#L24-L94), [stateless reset](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L303-L310)
+Source: [interactive history and cancellation](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/scalaAgentDemo.scala#L24-L94), [stateless reset](assets/source/repl-exec.html)
 
 {{end-stack}}
 
 ## Speaker notes
 
-The coding backend adds its own process and wall-time boundary. General in-process Scala snippets still run in the host JVM; safe mode is not an OS resource sandbox.
+The editor and GitHub skills execute their declared effects in the host JVM. Their safe interfaces and harness define the capability boundary; neither includes a separate process runner.

@@ -2,27 +2,26 @@
 (id = "universe", seconds = 75, layout = "standard")
 ---
 
-## The selected universe adds explicit parameters
+## A call can compose several atomic skills
 
 ```json
-{"universe":"filesystem",
- "scala_code":"puts(filesystem.list(filesystem.pwd()))"}
+{"universes": ["coding", "github"], "scala_code": "..."}
 ```
 
-| Selected universe | Supplied contextual parameters |
+| Selection | Capability parameters |
 | --- | --- |
 | `basic` | `output` |
-| `filesystem` | `output`, `filesystem` |
-| `secrets` | `output`, `secretAccess` |
+| `coding` | `output`, `coding` |
+| `coding` and `github` | `output`, `coding`, `github` |
 
-`runCode` always loads builtins. It adds only the selected skill's JARs and bindings, with no general universe composition.
+The resolver loads manifest `requires` contexts once and rejects cycles or duplicate binding names. API dependencies are compiled separately.
 
 {{stack footer}}
 
-Source: [runCode](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/ReplExec.scala#L339-L350), [binding merge](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/src/SkillScaffold.scala#L5-L15)
+Source: [safe harness](assets/source/repl-exec.html), [capability wiring](assets/source/skill-scaffold.html)
 
 {{end-stack}}
 
 ## Speaker notes
 
-Source: src/Skills.scala, src/ReplExec.scala and the three manifests. Basic skips a skill-specific implementation JAR. Builtins is always present and is deduplicated when selected directly. An unknown universe becomes a tool error. A universe name alone does not enforce repository paths or network destinations. Those restrictions belong in the implementation.
+The legacy universe field remains supported. The universes array selects multiple installed skills. Local API types come from using dep directives; runtime contexts come from manifest requires. The trusted graph is resolved before any snippet executes.

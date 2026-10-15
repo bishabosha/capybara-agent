@@ -1,0 +1,397 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>src/ScalaAgent.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>src/ScalaAgent.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import capybara.agent.OllamaClient.Chunk</code></li>
+<li id='L4'><code>import capybara.agent.OllamaClient.ChunkFinalState</code></li>
+<li id='L5'><code>import capybara.agent.OllamaClient.ChunkOutputState</code></li>
+<li id='L6'><code>import os.pwd</code></li>
+<li id='L7'><code>import steps.result.Result</code></li>
+<li id='L8'><code>import upickle.default.*</code></li>
+<li id='L9'><code>import upickle.implicits.namedTuples.default.given</code></li>
+<li id='L10'><code>import upickle.jsonschema.*</code></li>
+<li id='L11'><code></code></li>
+<li id='L12'><code>import scala.concurrent.ExecutionContext</code></li>
+<li id='L13'><code>import scala.concurrent.Future</code></li>
+<li id='L14'><code>import scala.concurrent.Promise</code></li>
+<li id='L15'><code>import scala.jdk.CollectionConverters.given</code></li>
+<li id='L16'><code></code></li>
+<li id='L17'><code>import OllamaClient.ChunkOutput</code></li>
+<li id='L18'><code>import capybara.agent.OllamaClient.ResolvedChunk</code></li>
+<li id='L19'><code>import ReplExec.ScalaToolResult</code></li>
+<li id='L20'><code></code></li>
+<li id='L21'><code>object ScalaAgent {</code></li>
+<li id='L22'><code></code></li>
+<li id='L23'><code>  case class ScalaToolCall(universe: String = "basic", scala_code: String, universes: Seq[String] = Nil) derives ReadWriter:</code></li>
+<li id='L24'><code>    def requestedUniverses: Seq[String] =</code></li>
+<li id='L25'><code>      if universes.nonEmpty then universes else universe.split(",").map(_.trim).filter(_.nonEmpty).toSeq</code></li>
+<li id='L26'><code>  type ScalaResolvedChunk = ResolvedChunk[ScalaToolCall, ScalaToolResult]</code></li>
+<li id='L27'><code>  final case class AgentResponse(chunks: Seq[ScalaResolvedChunk], usage: OllamaClient.Usage)</code></li>
+<li id='L28'><code>  private type RawScalaChunk = (Int, Chunk[ScalaToolCall])</code></li>
+<li id='L29'><code>  private final case class RawAgentResponse(chunks: Seq[RawScalaChunk], usage: OllamaClient.Usage)</code></li>
+<li id='L30'><code></code></li>
+<li id='L31'><code>  private val skillsDir = pwd / "skills"</code></li>
+<li id='L32'><code>  private val builtinSkillsDir = pwd / "builtin-skills"</code></li>
+<li id='L33'><code>  val Model = "qwen3.6:35b-a3b-coding-nvfp4"</code></li>
+<li id='L34'><code>  val DefaultContextWindow = 32768</code></li>
+<li id='L35'><code>  val DefaultKeepAlive = "30m"</code></li>
+<li id='L36'><code>  private val ContextWindowEnv = "CAPYBARA_CONTEXT_WINDOW"</code></li>
+<li id='L37'><code>  private val KeepAliveEnv = "CAPYBARA_KEEP_ALIVE"</code></li>
+<li id='L38'><code></code></li>
+<li id='L39'><code>  def configuredContextWindow: Int =</code></li>
+<li id='L40'><code>    sys.env</code></li>
+<li id='L41'><code>      .get(ContextWindowEnv)</code></li>
+<li id='L42'><code>      .flatMap(_.toIntOption)</code></li>
+<li id='L43'><code>      .filter(_ &gt; 0)</code></li>
+<li id='L44'><code>      .getOrElse(DefaultContextWindow)</code></li>
+<li id='L45'><code></code></li>
+<li id='L46'><code>  def configuredKeepAlive: String =</code></li>
+<li id='L47'><code>    sys.env</code></li>
+<li id='L48'><code>      .get(KeepAliveEnv)</code></li>
+<li id='L49'><code>      .map(_.trim)</code></li>
+<li id='L50'><code>      .filter(_.nonEmpty)</code></li>
+<li id='L51'><code>      .getOrElse(DefaultKeepAlive)</code></li>
+<li id='L52'><code></code></li>
+<li id='L53'><code>  def renderSkills(skills: Seq[Skill]): String = {</code></li>
+<li id='L54'><code>    Skills.renderPrompt("\n\n", skills)</code></li>
+<li id='L55'><code>  }</code></li>
+<li id='L56'><code>  val skills =</code></li>
+<li id='L57'><code>    try Skills.loadAll(skillsDir)</code></li>
+<li id='L58'><code>    catch { case _: IllegalArgumentException =&gt; Nil }</code></li>
+<li id='L59'><code>  val availableSkills = Skills.Basic +: skills</code></li>
+<li id='L60'><code>  val builtinSkill =</code></li>
+<li id='L61'><code>    Skills.loadAll(builtinSkillsDir).filter(_.universe == "capybara-builtins").head</code></li>
+<li id='L62'><code>  val SystemPrompt = {</code></li>
+<li id='L63'><code>    s"""|## TOOL CALLING:</code></li>
+<li id='L64'><code>        |You only have access to the `run_scala_code` tool.</code></li>
+<li id='L65'><code>        |All actions requested by the user are executed using this tool.</code></li>
+<li id='L66'><code>        |</code></li>
+<li id='L67'><code>        |### Execution Discipline:</code></li>
+<li id='L68'><code>        |</code></li>
+<li id='L69'><code>        |When the user asks for a straightforward calculation, data transformation, or standard-library-only answer, immediately call `run_scala_code` with `universe = "basic"`.</code></li>
+<li id='L70'><code>        |For `basic` tasks, spend no more than a few tokens deciding; do not reason step-by-step internally.</code></li>
+<li id='L71'><code>        |Do not first explain that you will call the tool.</code></li>
+<li id='L72'><code>        |Never write pre-tool narration such as "I will execute", "I will call the tool", "One detail", or notes about whether standard library methods are available.</code></li>
+<li id='L73'><code>        |If you are about to say that you will execute code, do not say it; make the tool call instead.</code></li>
+<li id='L74'><code>        |If you have already said an intent-to-execute sentence once, never repeat it; make the tool call or ask one concise clarification question.</code></li>
+<li id='L75'><code>        |Do not repeat the same sentence, paragraph, tool-call intent, or reasoning fragment. If you notice repetition, stop immediately and either make the tool call, ask one concise clarification question, or provide the final answer.</code></li>
+<li id='L76'><code>        |Never intentionally produce an infinite loop. Every response should make progress toward a tool call, a clarification question, or the final answer.</code></li>
+<li id='L77'><code>        |Do not put Scala code in a markdown code block unless the user explicitly asked to see code.</code></li>
+<li id='L78'><code>        |Do not deliberate over algorithm choices for small basic tasks; choose the simplest correct implementation and execute it.</code></li>
+<li id='L79'><code>        |For simple sequence requests, generate exactly the requested amount of data unless the user asks for more.</code></li>
+<li id='L80'><code>        |For follow-up requests, infer omitted nouns and context from the conversation history when the reference is clear.</code></li>
+<li id='L81'><code>        |Treat vague quality words like "optimized", "fast", "clean", or "simple" as preferences, not new requirements, unless the user gives a concrete constraint.</code></li>
+<li id='L82'><code>        |For small bounded outputs, prefer the obvious standard-library implementation and standard numeric type that fits the requested result.</code></li>
+<li id='L83'><code>        |If an ambiguity materially changes the answer, resource usage, or observable behavior, stop and ask one concise clarification question instead of continuing to reason internally.</code></li>
+<li id='L84'><code>        |After a successful tool result, answer with the result and only the minimal explanation needed.</code></li>
+<li id='L85'><code>        |</code></li>
+<li id='L86'><code>        |### Available Universes:</code></li>
+<li id='L87'><code>        |</code></li>
+<li id='L88'><code>        |The `universe` argument selects the execution context for the code.</code></li>
+<li id='L89'><code>        |Default to `basic` for ordinary computation that only needs the Scala or Java standard library.</code></li>
+<li id='L90'><code>        |Choose `basic` for calculations, string/list/map transformations, JSON-like data shaping with standard collections, date/time arithmetic, sorting, filtering, and similar local reasoning.</code></li>
+<li id='L91'><code>        |Use a skill-specific universe only when the task needs the API described for that universe.</code></li>
+<li id='L92'><code>        |Do not choose a skill-specific universe just because the user mentions a path, filename, URL, or command as plain text; choose it only when you must interact with that external resource.</code></li>
+<li id='L93'><code>        |Each skill expects its own calling convention.</code></li>
+<li id='L94'><code>        |For a composed call, supply universes = ["coding", "github"]. The legacy universe field still selects one skill.</code></li>
+<li id='L95'><code>        |Declared requires dependencies are loaded automatically, with their safe APIs and separate capabilities.</code></li>
+<li id='L96'><code>        |Skills remain atomic; composing them does not permit retaining capabilities in a pure callback.</code></li>
+<li id='L97'><code>        |</code></li>
+<li id='L98'><code>        |### Structured Output (available in every universe):</code></li>
+<li id='L99'><code>        |${builtinSkill.api}</code></li>
+<li id='L100'><code>        |The pure builtins API, puts/putsErr helpers, and formatting conversions are imported.</code></li>
+<li id='L101'><code>        |An OutputStreams capability is supplied as an explicit contextual parameter to your function.</code></li>
+<li id='L102'><code>        |Example: `puts(List(1, 2, 3).sum)`.</code></li>
+<li id='L103'><code>        |Do not use global `println`. Uncaught exceptions are caught and reported by the harness.</code></li>
+<li id='L104'><code>        |Tool results preserve separate stdout and stderr arrays. puts writes stdout; putsErr writes stderr.</code></li>
+<li id='L105'><code>        |Writing stderr alone is not execution failure. An executionError reports an uncaught exception or harness failure.</code></li>
+<li id='L106'><code>        |A successful call with no output confirms execution only; it supplies no computed answer.</code></li>
+<li id='L107'><code>        |</code></li>
+<li id='L108'><code>        |${renderSkills(availableSkills)}</code></li>
+<li id='L109'><code>        |""".stripMargin</code></li>
+<li id='L110'><code>  }</code></li>
+<li id='L111'><code></code></li>
+<li id='L112'><code>  def singleRequest(</code></li>
+<li id='L113'><code>      query: String,</code></li>
+<li id='L114'><code>      log: Logger,</code></li>
+<li id='L115'><code>      contextWindow: Int,</code></li>
+<li id='L116'><code>      keepAlive: String,</code></li>
+<li id='L117'><code>      think: Boolean,</code></li>
+<li id='L118'><code>      cancellationToken: CancellationToken = CancellationToken.Never</code></li>
+<li id='L119'><code>  )(using</code></li>
+<li id='L120'><code>      ExecutionContext</code></li>
+<li id='L121'><code>  ): Future[Result[AgentResponse, String]] =</code></li>
+<li id='L122'><code>    singleRequest(</code></li>
+<li id='L123'><code>      Vector(OllamaClient.ChatMessage.user(query)),</code></li>
+<li id='L124'><code>      log,</code></li>
+<li id='L125'><code>      contextWindow,</code></li>
+<li id='L126'><code>      keepAlive,</code></li>
+<li id='L127'><code>      think,</code></li>
+<li id='L128'><code>      cancellationToken</code></li>
+<li id='L129'><code>    )</code></li>
+<li id='L130'><code></code></li>
+<li id='L131'><code>  def singleRequest(</code></li>
+<li id='L132'><code>      history: Seq[OllamaClient.ChatMessage],</code></li>
+<li id='L133'><code>      log: Logger,</code></li>
+<li id='L134'><code>      contextWindow: Int,</code></li>
+<li id='L135'><code>      keepAlive: String,</code></li>
+<li id='L136'><code>      think: Boolean,</code></li>
+<li id='L137'><code>      cancellationToken: CancellationToken</code></li>
+<li id='L138'><code>  )(using</code></li>
+<li id='L139'><code>      ExecutionContext</code></li>
+<li id='L140'><code>  ): Future[Result[AgentResponse, String]] = {</code></li>
+<li id='L141'><code>    val tool = OllamaClient.toolsDef[ScalaToolCall](</code></li>
+<li id='L142'><code>      "run_scala_code",</code></li>
+<li id='L143'><code>      """Execute a Scala expression.</code></li>
+<li id='L144'><code>        |For simple standard-library-only requests, call this tool immediately with universe "basic"; do not announce or draft the code in normal assistant text first.</code></li>
+<li id='L145'><code>        |For universe "basic", avoid extended reasoning; choose a direct expression and call the tool.</code></li>
+<li id='L146'><code>        |Do not emit assistant text like "I will execute" before this tool. If execution is the next step, this tool call is the next token-level action.</code></li>
+<li id='L147'><code>        |Use universe "basic" for arithmetic, strings, collections, dates, parsing, or other standard-library-only tasks.</code></li>
+<li id='L148'><code>        |The system does not have access to side-effecting operations such as file I/O, network I/O, shell commands, or user-visible `println`</code></li>
+<li id='L149'><code>        |unless explicitly provided by the requested universe.</code></li>
+<li id='L150'><code>        |Call `puts(value)` explicitly to emit structured output; it is available in every universe.</code></li>
+<li id='L151'><code>        |The final expression is discarded. Without a print call, successful execution produces no output.</code></li>
+<li id='L152'><code>        |Multiple print calls emit multiple values in order. Uncaught exceptions are reported automatically.</code></li>
+<li id='L153'><code>        |""".stripMargin</code></li>
+<li id='L154'><code>    )</code></li>
+<li id='L155'><code>    val request =</code></li>
+<li id='L156'><code>      try ModelProvider.request(</code></li>
+<li id='L157'><code>        messages = OllamaClient.ChatMessage.system(SystemPrompt) +: history,</code></li>
+<li id='L158'><code>        tools = tool.tools,</code></li>
+<li id='L159'><code>        toolParsers = tool.toolParsers,</code></li>
+<li id='L160'><code>        contextWindow = contextWindow,</code></li>
+<li id='L161'><code>        keepAlive = keepAlive,</code></li>
+<li id='L162'><code>        think = think,</code></li>
+<li id='L163'><code>        cancellationToken = cancellationToken</code></li>
+<li id='L164'><code>      )</code></li>
+<li id='L165'><code>      catch</code></li>
+<li id='L166'><code>        case scala.util.control.NonFatal(error) =&gt;</code></li>
+<li id='L167'><code>          return Future.successful(Result.Err(error.getMessage))</code></li>
+<li id='L168'><code>    val chunks = Promise[</code></li>
+<li id='L169'><code>      (</code></li>
+<li id='L170'><code>          collected: Result[RawAgentResponse, String],</code></li>
+<li id='L171'><code>          scalaCommands: Map[Int, Promise[ScalaToolResult]]</code></li>
+<li id='L172'><code>      )</code></li>
+<li id='L173'><code>    ]()</code></li>
+<li id='L174'><code>    val chunker = new ChunkOutput.ChunkReader[Chunk[ScalaToolCall]]() {</code></li>
+<li id='L175'><code>      private val startedAtNanos = System.nanoTime()</code></li>
+<li id='L176'><code>      private val lastStatusAtNanos = new java.util.concurrent.atomic.AtomicLong(0L)</code></li>
+<li id='L177'><code>      private val receivedChunks = new java.util.concurrent.atomic.AtomicInteger(0)</code></li>
+<li id='L178'><code>      private val receivedChars = new java.util.concurrent.atomic.AtomicLong(0L)</code></li>
+<li id='L179'><code>      private val outstandingToolPromises = new java.util.concurrent.atomic.AtomicInteger(0)</code></li>
+<li id='L180'><code>      private val collected =</code></li>
+<li id='L181'><code>        new java.util.concurrent.ConcurrentLinkedDeque[</code></li>
+<li id='L182'><code>          (</code></li>
+<li id='L183'><code>              Int,</code></li>
+<li id='L184'><code>              Chunk[</code></li>
+<li id='L185'><code>                ScalaToolCall</code></li>
+<li id='L186'><code>              ]</code></li>
+<li id='L187'><code>          )</code></li>
+<li id='L188'><code>        ]()</code></li>
+<li id='L189'><code>      private val commandCounter = new java.util.concurrent.atomic.AtomicInteger(0)</code></li>
+<li id='L190'><code>      private val scalaCommands =</code></li>
+<li id='L191'><code>        new java.util.concurrent.ConcurrentHashMap[Int, Promise[ScalaToolResult]]()</code></li>
+<li id='L192'><code>      private var seenContent =</code></li>
+<li id='L193'><code>        new java.util.concurrent.atomic.AtomicBoolean(false)</code></li>
+<li id='L194'><code>      private var seenTools =</code></li>
+<li id='L195'><code>        new java.util.concurrent.atomic.AtomicBoolean(false)</code></li>
+<li id='L196'><code>      private var thinkingDone =</code></li>
+<li id='L197'><code>        new java.util.concurrent.atomic.AtomicBoolean(false)</code></li>
+<li id='L198'><code>      private var seenAny =</code></li>
+<li id='L199'><code>        new java.util.concurrent.atomic.AtomicBoolean(false)</code></li>
+<li id='L200'><code></code></li>
+<li id='L201'><code>      private def estimatedTokens(chars: Long): Long =</code></li>
+<li id='L202'><code>        if chars == 0 then 0L else math.max(1L, (chars + 3L) / 4L)</code></li>
+<li id='L203'><code></code></li>
+<li id='L204'><code>      private def elapsedSeconds: Long =</code></li>
+<li id='L205'><code>        ((System.nanoTime() - startedAtNanos) / 1_000_000_000L).max(0L)</code></li>
+<li id='L206'><code></code></li>
+<li id='L207'><code>      private def updateStatus(label: String, force: Boolean = false): Unit =</code></li>
+<li id='L208'><code>        if cancellationToken.isCancelled then ()</code></li>
+<li id='L209'><code>        else</code></li>
+<li id='L210'><code>          val now = System.nanoTime()</code></li>
+<li id='L211'><code>          val previous = lastStatusAtNanos.get()</code></li>
+<li id='L212'><code>          if !force &amp;&amp; previous != 0L &amp;&amp; now - previous &lt; 250_000_000L then ()</code></li>
+<li id='L213'><code>          else if lastStatusAtNanos.compareAndSet(previous, now) || force then</code></li>
+<li id='L214'><code>            val chunks = receivedChunks.get()</code></li>
+<li id='L215'><code>            val tokens = estimatedTokens(receivedChars.get())</code></li>
+<li id='L216'><code>            val pendingTools = outstandingToolPromises.get()</code></li>
+<li id='L217'><code>            val toolStatus =</code></li>
+<li id='L218'><code>              if pendingTools == 0 then ""</code></li>
+<li id='L219'><code>              else s", $pendingTools tool promises pending"</code></li>
+<li id='L220'><code>            val heapStatus = RuntimeStatus.heapStatus</code></li>
+<li id='L221'><code>            log.setStatus(</code></li>
+<li id='L222'><code>              Some(</code></li>
+<li id='L223'><code>                s"${Console.CYAN}[$label: $chunks chunks, ~$tokens tokens$toolStatus, ${elapsedSeconds}s, $heapStatus]${Console.RESET}"</code></li>
+<li id='L224'><code>              )</code></li>
+<li id='L225'><code>            )</code></li>
+<li id='L226'><code></code></li>
+<li id='L227'><code>      private def recordChunk(label: String, chars: Int): Unit =</code></li>
+<li id='L228'><code>        val chunks = receivedChunks.incrementAndGet()</code></li>
+<li id='L229'><code>        receivedChars.addAndGet(chars.toLong.max(0L))</code></li>
+<li id='L230'><code>        updateStatus(label, force = chunks == 1)</code></li>
+<li id='L231'><code></code></li>
+<li id='L232'><code>      private def checkThinkingDone(): Unit =</code></li>
+<li id='L233'><code>        if thinkingDone.compareAndSet(false, true) then log.print("\n")</code></li>
+<li id='L234'><code></code></li>
+<li id='L235'><code>      updateStatus("waiting", force = true)</code></li>
+<li id='L236'><code></code></li>
+<li id='L237'><code>      override def onChunk(chunk: Chunk[ScalaToolCall]): Unit =</code></li>
+<li id='L238'><code>        seenAny.set(true)</code></li>
+<li id='L239'><code>        var chunkId = -1</code></li>
+<li id='L240'><code>        chunk match {</code></li>
+<li id='L241'><code>          case Chunk.ResponseItems(_) =&gt; ()</code></li>
+<li id='L242'><code>          case Chunk.Content(content) =&gt;</code></li>
+<li id='L243'><code>            recordChunk("receiving content", content.length)</code></li>
+<li id='L244'><code>            checkThinkingDone()</code></li>
+<li id='L245'><code>            if seenContent.compareAndSet(false, true) then log.print("-----\n")</code></li>
+<li id='L246'><code>            log.print(Console.BOLD + content + Console.RESET)</code></li>
+<li id='L247'><code>          case Chunk.Thinking(thinking) =&gt;</code></li>
+<li id='L248'><code>            recordChunk("thinking", thinking.length)</code></li>
+<li id='L249'><code>            log.print(Console.CYAN + thinking + Console.RESET)</code></li>
+<li id='L250'><code>          case Chunk.Tools(tool_calls) =&gt;</code></li>
+<li id='L251'><code>            recordChunk(</code></li>
+<li id='L252'><code>              "calling tool",</code></li>
+<li id='L253'><code>              tool_calls.map(call =&gt; call.arguments.scala_code.length).sum</code></li>
+<li id='L254'><code>            )</code></li>
+<li id='L255'><code>            checkThinkingDone()</code></li>
+<li id='L256'><code>            if seenTools.compareAndSet(false, true) then log.print("-----\n")</code></li>
+<li id='L257'><code>            chunkId =</code></li>
+<li id='L258'><code>              // later we retrieve based on the offset from the first tool call</code></li>
+<li id='L259'><code>              commandCounter.get() + 1</code></li>
+<li id='L260'><code>            for scalaCode &lt;- tool_calls do</code></li>
+<li id='L261'><code>              // todo: extract tool call id from llm?</code></li>
+<li id='L262'><code>              val promise = Promise[ScalaToolResult]()</code></li>
+<li id='L263'><code>              val callId = commandCounter.incrementAndGet()</code></li>
+<li id='L264'><code>              scalaCommands.put(callId, promise)</code></li>
+<li id='L265'><code>              outstandingToolPromises.incrementAndGet()</code></li>
+<li id='L266'><code>              updateStatus("tool promise started", force = true)</code></li>
+<li id='L267'><code>              promise.future.onComplete { _ =&gt;</code></li>
+<li id='L268'><code>                outstandingToolPromises.decrementAndGet()</code></li>
+<li id='L269'><code>                updateStatus("tool promise completed", force = true)</code></li>
+<li id='L270'><code>              }</code></li>
+<li id='L271'><code>              val result =</code></li>
+<li id='L272'><code>                Skills.resolve(scalaCode.arguments.requestedUniverses, availableSkills, builtinSkill) match</code></li>
+<li id='L273'><code>                  case Result.Ok(skills) =&gt;</code></li>
+<li id='L274'><code>                    ReplExec</code></li>
+<li id='L275'><code>                      .runCodeHarness(</code></li>
+<li id='L276'><code>                        builtinSkill,</code></li>
+<li id='L277'><code>                        skills,</code></li>
+<li id='L278'><code>                        scalaCode.arguments.scala_code,</code></li>
+<li id='L279'><code>                        callId,</code></li>
+<li id='L280'><code>                        log,</code></li>
+<li id='L281'><code>                        cancellationToken</code></li>
+<li id='L282'><code>                      )</code></li>
+<li id='L283'><code>                  case Result.Err(error) =&gt;</code></li>
+<li id='L284'><code>                    Future.successful(ScalaToolResult.Failure(error))</code></li>
+<li id='L285'><code>              promise.tryCompleteWith(result)</code></li>
+<li id='L286'><code>              log.print(</code></li>
+<li id='L287'><code>                s"${Console.YELLOW}${scalaCode.name}[${scalaCode.arguments.requestedUniverses.mkString(",")}]:${Console.RESET}\n"</code></li>
+<li id='L288'><code>              )</code></li>
+<li id='L289'><code>              log.print(</code></li>
+<li id='L290'><code>                s"${Console.YELLOW}```scala${Console.RESET}\n"</code></li>
+<li id='L291'><code>              )</code></li>
+<li id='L292'><code>              log.print(s"${Console.YELLOW}${scalaCode.arguments.scala_code}${Console.RESET}")</code></li>
+<li id='L293'><code>              log.print(s"\n${Console.YELLOW}```${Console.RESET}\n")</code></li>
+<li id='L294'><code>        }</code></li>
+<li id='L295'><code>        collected.add((chunkId, chunk))</code></li>
+<li id='L296'><code></code></li>
+<li id='L297'><code>      override def onComplete(</code></li>
+<li id='L298'><code>          finalState: ChunkOutputState &amp; ChunkFinalState,</code></li>
+<li id='L299'><code>          usage: OllamaClient.Usage</code></li>
+<li id='L300'><code>      ): Unit =</code></li>
+<li id='L301'><code>        updateStatus("complete", force = true)</code></li>
+<li id='L302'><code>        if seenAny.get() then log.print("\n")</code></li>
+<li id='L303'><code>        chunks.success(</code></li>
+<li id='L304'><code>          finalState match</code></li>
+<li id='L305'><code>            case ChunkOutputState.Done =&gt;</code></li>
+<li id='L306'><code>              (</code></li>
+<li id='L307'><code>                Result.Ok(RawAgentResponse(collected.asScala.toVector, usage)),</code></li>
+<li id='L308'><code>                scalaCommands.asScala.toMap</code></li>
+<li id='L309'><code>              )</code></li>
+<li id='L310'><code>            case ChunkOutputState.Error(msg) =&gt;</code></li>
+<li id='L311'><code>              (Result.Err(msg), scalaCommands.asScala.toMap)</code></li>
+<li id='L312'><code>        )</code></li>
+<li id='L313'><code>    }</code></li>
+<li id='L314'><code>    request.send(chunker).flatMap {</code></li>
+<li id='L315'><code>      case Result.Ok(_) =&gt;</code></li>
+<li id='L316'><code>        for</code></li>
+<li id='L317'><code>          cs &lt;- chunks.future</code></li>
+<li id='L318'><code>          results &lt;- Future.sequence(cs.scalaCommands.map((k, p) =&gt; p.future.map(r =&gt; (k, r))))</code></li>
+<li id='L319'><code>        yield cs.collected.map({ response =&gt;</code></li>
+<li id='L320'><code>          AgentResponse(</code></li>
+<li id='L321'><code>            response.chunks.map({ (id, chunk) =&gt;</code></li>
+<li id='L322'><code>              chunk match</code></li>
+<li id='L323'><code>                case Chunk.ResponseItems(items) =&gt; ResolvedChunk.ResponseItems(items)</code></li>
+<li id='L324'><code>                case Chunk.Content(content)   =&gt; ResolvedChunk.Content(content)</code></li>
+<li id='L325'><code>                case Chunk.Thinking(thinking) =&gt; ResolvedChunk.Thinking(thinking)</code></li>
+<li id='L326'><code>                case Chunk.Tools(tool_calls)  =&gt;</code></li>
+<li id='L327'><code>                  ResolvedChunk.Tools(</code></li>
+<li id='L328'><code>                    tool_calls.zipWithIndex.map { case (tc, idx) =&gt;</code></li>
+<li id='L329'><code>                      (</code></li>
+<li id='L330'><code>                        tc,</code></li>
+<li id='L331'><code>                        results.toMap</code></li>
+<li id='L332'><code>                          .getOrElse(id + idx, ScalaToolResult.Failure("No response"))</code></li>
+<li id='L333'><code>                      )</code></li>
+<li id='L334'><code>                    }.toVector</code></li>
+<li id='L335'><code>                  )</code></li>
+<li id='L336'><code>            }),</code></li>
+<li id='L337'><code>            response.usage</code></li>
+<li id='L338'><code>          )</code></li>
+<li id='L339'><code>        })</code></li>
+<li id='L340'><code>      case err: Result.Err[?] =&gt; Future.successful(err)</code></li>
+<li id='L341'><code>    }</code></li>
+<li id='L342'><code>  }</code></li>
+<li id='L343'><code></code></li>
+<li id='L344'><code>  def hasToolCalls(chunks: Seq[ScalaResolvedChunk]): Boolean =</code></li>
+<li id='L345'><code>    chunks.exists {</code></li>
+<li id='L346'><code>      case ResolvedChunk.Tools(toolCalls) =&gt; toolCalls.nonEmpty</code></li>
+<li id='L347'><code>      case _                              =&gt; false</code></li>
+<li id='L348'><code>    }</code></li>
+<li id='L349'><code></code></li>
+<li id='L350'><code>  def appendCollectedChunks(</code></li>
+<li id='L351'><code>      history: Vector[OllamaClient.ChatMessage],</code></li>
+<li id='L352'><code>      chunks: Seq[ScalaResolvedChunk]</code></li>
+<li id='L353'><code>  ): Vector[OllamaClient.ChatMessage] =</code></li>
+<li id='L354'><code>    history ++ messagesFromChunks(chunks)</code></li>
+<li id='L355'><code></code></li>
+<li id='L356'><code>  private def messagesFromChunks(</code></li>
+<li id='L357'><code>      chunks: Seq[ScalaResolvedChunk]</code></li>
+<li id='L358'><code>  ): Vector[OllamaClient.ChatMessage] = {</code></li>
+<li id='L359'><code>    val thinking = new StringBuilder</code></li>
+<li id='L360'><code>    val content = new StringBuilder</code></li>
+<li id='L361'><code>    val toolCalls = Vector.newBuilder[OllamaClient.ToolCall[ScalaToolCall]]</code></li>
+<li id='L362'><code>    val toolResults = Vector.newBuilder[OllamaClient.ChatMessage]</code></li>
+<li id='L363'><code>    var responseItems: Option[Vector[ujson.Value]] = None</code></li>
+<li id='L364'><code></code></li>
+<li id='L365'><code>    chunks.foreach {</code></li>
+<li id='L366'><code>      case ResolvedChunk.ResponseItems(items) =&gt;</code></li>
+<li id='L367'><code>        responseItems = Some(items)</code></li>
+<li id='L368'><code>      case ResolvedChunk.Thinking(chunk) =&gt;</code></li>
+<li id='L369'><code>        thinking.append(chunk)</code></li>
+<li id='L370'><code>      case ResolvedChunk.Content(chunk) =&gt;</code></li>
+<li id='L371'><code>        content.append(chunk)</code></li>
+<li id='L372'><code>      case ResolvedChunk.Tools(calls) =&gt;</code></li>
+<li id='L373'><code>        calls.foreach { case (toolCall, result) =&gt;</code></li>
+<li id='L374'><code>          toolCalls += toolCall</code></li>
+<li id='L375'><code>          toolResults += OllamaClient.ChatMessage.tool(toolCall.name, result.encodeAsJson, toolCall.id)</code></li>
+<li id='L376'><code>        }</code></li>
+<li id='L377'><code>    }</code></li>
+<li id='L378'><code></code></li>
+<li id='L379'><code>    val accumulatedToolCalls = toolCalls.result()</code></li>
+<li id='L380'><code>    val assistant =</code></li>
+<li id='L381'><code>      if thinking.nonEmpty || content.nonEmpty || accumulatedToolCalls.nonEmpty || responseItems.nonEmpty then</code></li>
+<li id='L382'><code>        Vector(</code></li>
+<li id='L383'><code>          OllamaClient.ChatMessage.assistant(</code></li>
+<li id='L384'><code>            thinking = thinking.toString,</code></li>
+<li id='L385'><code>            content = content.toString,</code></li>
+<li id='L386'><code>            toolCalls = accumulatedToolCalls</code></li>
+<li id='L387'><code>          ).copy(responseItems = responseItems)</code></li>
+<li id='L388'><code>        )</code></li>
+<li id='L389'><code>      else Vector.empty</code></li>
+<li id='L390'><code></code></li>
+<li id='L391'><code>    assistant ++ toolResults.result()</code></li>
+<li id='L392'><code>  }</code></li>
+<li id='L393'><code></code></li>
+<li id='L394'><code>}</code></li></ol></html>

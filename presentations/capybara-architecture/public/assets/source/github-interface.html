@@ -1,0 +1,26 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>skills/github/scripts/Interface.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>skills/github/scripts/Interface.scala</h1><ol><li id='L1'><code>//&gt; using repository ivy2local</code></li>
+<li id='L2'><code>//&gt; using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"</code></li>
+<li id='L3'><code>package githubskill</code></li>
+<li id='L4'><code></code></li>
+<li id='L5'><code>import scala.language.experimental.captureChecking</code></li>
+<li id='L6'><code></code></li>
+<li id='L7'><code>case class Issue(number: Int, title: String, body: String, url: String)</code></li>
+<li id='L8'><code>case class IssueSummary(number: Int, title: String, url: String)</code></li>
+<li id='L9'><code>case class Branch(name: String, commit: String)</code></li>
+<li id='L10'><code>case class PullRequest(number: Int, url: String)</code></li>
+<li id='L11'><code>case class CheckSummary(commit: String, status: String)</code></li>
+<li id='L12'><code></code></li>
+<li id='L13'><code>/** GitHub authority only. Local text editing is a separate coding capability. */</code></li>
+<li id='L14'><code>trait GitHub extends caps.SharedCapability {</code></li>
+<li id='L15'><code>  def listIssues(page: Int): Seq[IssueSummary]</code></li>
+<li id='L16'><code>  def lookupIssue(number: Int): Issue</code></li>
+<li id='L17'><code>  def branch(name: String): Branch</code></li>
+<li id='L18'><code>  def createBranch(name: String): Branch</code></li>
+<li id='L19'><code>  /** Requires the caller's file authority to read selected paths before committing and pushing. */</code></li>
+<li id='L20'><code>  def commit(branch: Branch, message: String, paths: Seq[String])(using files: editing.TextFiles): Branch</code></li>
+<li id='L21'><code>  def createPullRequest(branch: Branch, title: String, body: String): PullRequest</code></li>
+<li id='L22'><code>  def checks(branch: Branch): CheckSummary</code></li>
+<li id='L23'><code>}</code></li></ol></html>
