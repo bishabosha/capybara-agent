@@ -80,11 +80,15 @@ object builtins extends system.Builtins { self =>
 
   private def displayShowable(showable: system.Showable, isKey: Boolean): String =
     def asString(str: String): String =
-      '"' + str
-        .replaceAllLiterally("\"", "\\\"")
-        .replaceAllLiterally("\n", "\\n")
-        .replaceAllLiterally("\r", "\\r")
-        .replaceAllLiterally("\t", "\\t") + '"'
+      '"' + str.flatMap {
+        case '\\' => "\\\\"
+        case '"' => "\\\""
+        case '\n' => "\\n"
+        case '\r' => "\\r"
+        case '\t' => "\\t"
+        case char if char < ' ' => f"\\u${char.toInt}%04x"
+        case char => char.toString
+      } + '"'
     showable match {
       case showable: system.Literal =>
         val (raw, isString) = showable.value match

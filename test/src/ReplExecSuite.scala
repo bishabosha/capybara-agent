@@ -52,6 +52,14 @@ class ReplExecSuite extends munit.FunSuite:
     )
   }
 
+  test("structured strings escape backslashes and all JSON control characters") {
+    val value = "regex /\\s+/u, path C:\\work\\file, quote \" and controls " +
+      (0 until 32).map(_.toChar).mkString + " λ"
+    val output = execute(s"puts(${ujson.write(value)})")
+    assertEquals(ujson.read(output.stdout)("special.success").str, value)
+    assertEquals(ReplExec.decodeOutput(output), ScalaToolResult.Success(Vector(ujson.Str(value)), Vector.empty))
+  }
+
   test("uncaught runtime exceptions are reported without an explicit print") {
     val output = execute("val zero = 0; 1 / zero")
     val error = ujson.read(output.stderr)("special.error")

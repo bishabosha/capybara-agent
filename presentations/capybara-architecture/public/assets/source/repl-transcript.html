@@ -1,0 +1,50 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>Generated REPL command transcript</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>Generated REPL command transcript</h1><ol><li id='L1'><code>// Generated command transcript for universe 'filesystem'.</code></li>
+<li id='L2'><code>// The per-call UUID is normalized; all methods use the actual scaffold templates.</code></li>
+<li id='L3'><code>// Initial ReplDriver language: experimental.captureChecking.</code></li>
+<li id='L4'><code>// Cache packaging, if needed, happens before these REPL commands.</code></li>
+<li id='L5'><code></code></li>
+<li id='L6'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/capybara-builtins/sigs.jar</code></li>
+<li id='L7'><code></code></li>
+<li id='L8'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/capybara-builtins/impl.jar</code></li>
+<li id='L9'><code></code></li>
+<li id='L10'><code>import system_impl.builtins; import builtins.given; import builtins.{puts, putsErr}</code></li>
+<li id='L11'><code></code></li>
+<li id='L12'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/filesystem/sigs.jar</code></li>
+<li id='L13'><code></code></li>
+<li id='L14'><code>:jar /Users/jamie/Workspace/capybara-agent/.agent-runtime/interface/filesystem/impl.jar</code></li>
+<li id='L15'><code></code></li>
+<li id='L16'><code>// HOST: clear the language-feature setting before changing mode.</code></li>
+<li id='L17'><code></code></li>
+<li id='L18'><code>:settings -language:experimental.safe</code></li>
+<li id='L19'><code></code></li>
+<li id='L20'><code>def agentCode_00000000_0000_0000_0000_000000000001(using output: builtins.OutputStreams, filesystem: fs.Filesystem): Unit = {</code></li>
+<li id='L21'><code>puts(filesystem.pwd())</code></li>
+<li id='L22'><code></code></li>
+<li id='L23'><code>()</code></li>
+<li id='L24'><code>}</code></li>
+<li id='L25'><code></code></li>
+<li id='L26'><code></code></li>
+<li id='L27'><code>// HOST: clear the language-feature setting again.</code></li>
+<li id='L28'><code></code></li>
+<li id='L29'><code>:settings -language:experimental.captureChecking</code></li>
+<li id='L30'><code></code></li>
+<li id='L31'><code>def harnessEntry_00000000_0000_0000_0000_000000000001(__harnessStdout: java.io.PrintStream, __harnessStderr: java.io.PrintStream): Boolean =</code></li>
+<li id='L32'><code>{</code></li>
+<li id='L33'><code>val __capybara_output: builtins.OutputStreams = builtins.outputStreams(__harnessStdout, __harnessStderr)</code></li>
+<li id='L34'><code>val __capybara_filesystem: fs.Filesystem = fs.internal.impl()</code></li>
+<li id='L35'><code>try { agentCode_00000000_0000_0000_0000_000000000001(using __capybara_output, __capybara_filesystem); true }</code></li>
+<li id='L36'><code>catch {</code></li>
+<li id='L37'><code>  case scala.util.control.NonFatal(error) =&gt;</code></li>
+<li id='L38'><code>    __capybara_output.printErr(builtins.baseReflectiveShowable(error))</code></li>
+<li id='L39'><code>    false</code></li>
+<li id='L40'><code>}</code></li>
+<li id='L41'><code>}</code></li>
+<li id='L42'><code></code></li>
+<li id='L43'><code></code></li>
+<li id='L44'><code>// HOST invocation, not a submitted REPL command:</code></li>
+<li id='L45'><code>// invokeEntryPoint("harnessEntry_00000000_0000_0000_0000_000000000001", stdout.stream, stderr.stream)</code></li>
+<li id='L46'><code>// This reflects the compiled entry method with two host-owned PrintStreams.</code></li>
+<li id='L47'><code>// Finally: resetToInitial(), restore initialState, and clear diagnostics.</code></li></ol></html>

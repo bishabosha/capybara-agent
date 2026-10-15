@@ -1,0 +1,19 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>skills/coding/scripts/Interface.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>skills/coding/scripts/Interface.scala</h1><ol><li id='L1'><code>package workshop</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import scala.language.experimental.captureChecking</code></li>
+<li id='L4'><code></code></li>
+<li id='L5'><code>/** A fixed summary. The test process cannot return its logs to the model. */</code></li>
+<li id='L6'><code>case class TestSummary(status: String)</code></li>
+<li id='L7'><code></code></li>
+<li id='L8'><code>trait Coding extends caps.SharedCapability {</code></li>
+<li id='L9'><code>  def read(path: String): String</code></li>
+<li id='L10'><code>  def replace(path: String, expected: String, next: String): Unit</code></li>
+<li id='L11'><code>  /** Transform approved source with a callback that cannot retain any capability. */</code></li>
+<li id='L12'><code>  def transformSource(f: String -&gt; String): Unit</code></li>
+<li id='L13'><code>  def test(): TestSummary</code></li>
+<li id='L14'><code>  def diff(): String</code></li>
+<li id='L15'><code>  def sandboxChecks(): Seq[String]</code></li>
+<li id='L16'><code>}</code></li></ol></html>

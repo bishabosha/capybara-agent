@@ -271,6 +271,54 @@ Runtime failures add `executionError` while retaining both output arrays.
 Silent success has empty stdout and stderr arrays and displays no result. The
 system prompt explains the separate channels and supplied output capability.
 
+## Runnable coding workshop
+
+The `coding` skill can read, edit and test the bundled word-count GitHub exercise.
+Initialize a dedicated source-only repository before starting the agent:
+
+```sh
+python3 scripts/workshop.py init --repo /tmp/capybara-word-count-lab
+export CAPYBARA_WORKSHOP_ROOT=/tmp/capybara-word-count-lab
+export CAPYBARA_WORKSHOP_NODE="$(command -v node)"
+./mill run skill-run --skill skills/coding --file examples/snippets/coding.scala
+```
+
+The complete snippet uses a capture-checked pure source transformation, runs
+the failing baseline and fixed tests, and prints a one-file diff. macOS,
+Python 3 and native Node 20+ are required for this particular exercise.
+Tests use a credential-free, read-only snapshot under `sandbox-exec`; unsupported
+environments fail closed. GitHub publishing stays in a separate human terminal.
+See [the workshop guide](presentations/capybara-architecture/workshop/README.md)
+for the agent prompt, GitHub setup, capture-checking exercises and exact policies.
+
+To inspect generated commands for one tool call without executing it:
+
+```sh
+./mill run skill-transcript --skill skills/filesystem --file examples/snippets/transcript-filesystem.scala
+```
+
+## GitHub issue-to-PR workflow
+
+The `github` universe implements issue lookup, approved source edits, sandboxed
+tests, topic-branch publication and draft PR creation through GitHub's REST API.
+The host fixes the repository and file policy; credentials stay in trusted
+wiring. Pure transformations reject captured capabilities. Publication checks
+outgoing content, an exact-snapshot test receipt and the expected remote heads.
+
+See [the GitHub skill setup and runnable example](skills/github/README.md).
+Configure `CAPYBARA_GITHUB_PROFILE` and the host-only `CAPYBARA_GITHUB_TOKEN`, then:
+
+```sh
+./mill run skill-run --skill skills/github --file examples/snippets/github-lab.scala
+```
+
+This command performs real branch/PR writes for the configured repository. The
+example assumes issue #1 and the pristine word-count starter. GitHub operations
+are repository-independent; the included local test runner supports macOS/Node.
+The default policy refuses publication without a passing test of the current
+snapshot. `GitHubSkillSuite`, run through MCP, validates the complete workflow
+with a deterministic GitHub transport and real safe compiler/process sandbox.
+
 ## Model providers
 
 Ollama is the default provider, using `qwen3.6:35b-a3b-coding-nvfp4`

@@ -1,0 +1,120 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>test/src/WorkshopSuite.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>test/src/WorkshopSuite.scala</h1><ol><li id='L1'><code>package capybara.agent</code></li>
+<li id='L2'><code></code></li>
+<li id='L3'><code>import steps.result.Result</code></li>
+<li id='L4'><code></code></li>
+<li id='L5'><code>/** Exercises the public skill through the same safe compiler and trusted harness as the agent. */</code></li>
+<li id='L6'><code>class WorkshopSuite extends munit.FunSuite:</code></li>
+<li id='L7'><code>  override val munitTimeout = scala.concurrent.duration.Duration(180, "s")</code></li>
+<li id='L8'><code></code></li>
+<li id='L9'><code>  private def loaded(path: String): Skill = Skills.loadFrom(os.pwd / os.RelPath(path)) match</code></li>
+<li id='L10'><code>    case Result.Ok(skill) =&gt; skill</code></li>
+<li id='L11'><code>    case Result.Err(error) =&gt; fail(error)</code></li>
+<li id='L12'><code></code></li>
+<li id='L13'><code>  private lazy val builtins = loaded("builtin-skills/capybara-builtins")</code></li>
+<li id='L14'><code>  private val python = "/usr/bin/python3"</code></li>
+<li id='L15'><code>  private lazy val node = os.proc("/usr/bin/which", "node").call().out.text().trim</code></li>
+<li id='L16'><code></code></li>
+<li id='L17'><code>  private def withWorkshop(test: (Skill, os.Path) =&gt; Unit): Unit =</code></li>
+<li id='L18'><code>    val parent = os.temp.dir(prefix = "capybara-workshop-suite-")</code></li>
+<li id='L19'><code>    val root = parent / "repo"</code></li>
+<li id='L20'><code>    try</code></li>
+<li id='L21'><code>      val setup = os.proc(python, "scripts/workshop.py", "init", "--repo", root.toString).call()</code></li>
+<li id='L22'><code>      assert(ujson.read(setup.out.text())("ok").bool)</code></li>
+<li id='L23'><code>      val original = loaded("skills/coding")</code></li>
+<li id='L24'><code>      val factory = s"workshop.internal.configured(${ujson.write(root.toString)}, ${ujson.write(node)}, ${ujson.write(python)})"</code></li>
+<li id='L25'><code>      val skill = original.copy(bindings = original.bindings.map(b =&gt; (name = b.name, tpe = b.tpe, value = factory)))</code></li>
+<li id='L26'><code>      test(skill, root)</code></li>
+<li id='L27'><code>    finally os.remove.all(parent)</code></li>
+<li id='L28'><code></code></li>
+<li id='L29'><code>  private def run(skill: Skill, code: String): ReplExec.CodeOutput =</code></li>
+<li id='L30'><code>    ReplExec.runCode(builtins, skill, code) match</code></li>
+<li id='L31'><code>      case Result.Ok(output) =&gt; output</code></li>
+<li id='L32'><code>      case Result.Err(error) =&gt; fail(error)</code></li>
+<li id='L33'><code></code></li>
+<li id='L34'><code>  test("workshop policy and real sandbox probes") {</code></li>
+<li id='L35'><code>    assume(System.getProperty("os.name").contains("Mac"))</code></li>
+<li id='L36'><code>    val result = os.proc(python, "scripts/test_workshop.py").call(check = false, timeout = 60000)</code></li>
+<li id='L37'><code>    assertEquals(result.exitCode, 0, result.out.text() + result.err.text())</code></li>
+<li id='L38'><code>  }</code></li>
+<li id='L39'><code></code></li>
+<li id='L40'><code>  test("coding universe compiles in safe mode and completes the word-count workflow") {</code></li>
+<li id='L41'><code>    assume(System.getProperty("os.name").contains("Mac"))</code></li>
+<li id='L42'><code>    withWorkshop { (skill, root) =&gt;</code></li>
+<li id='L43'><code>      val baseline = run(skill, "puts(coding.test())")</code></li>
+<li id='L44'><code>      assert(!baseline.failed)</code></li>
+<li id='L45'><code>      assertEquals(ujson.read(baseline.stdout)("special.success")("status").str, "failed")</code></li>
+<li id='L46'><code>      val fix = """export function countWords(text) {</code></li>
+<li id='L47'><code>                |  const clean = text.trim();</code></li>
+<li id='L48'><code>                |  return clean === '' ? 0 : clean.split(/\s+/u).length;</code></li>
+<li id='L49'><code>                |}</code></li>
+<li id='L50'><code>                |""".stripMargin</code></li>
+<li id='L51'><code>      val code = s"""val before = coding.read("src/word-count.mjs")</code></li>
+<li id='L52'><code>                   |coding.replace("src/word-count.mjs", before, ${ujson.write(fix)})</code></li>
+<li id='L53'><code>                   |puts(coding.test())</code></li>
+<li id='L54'><code>                   |puts(coding.diff())</code></li>
+<li id='L55'><code>                   |puts(coding.sandboxChecks())</code></li>
+<li id='L56'><code>                   |""".stripMargin</code></li>
+<li id='L57'><code>      val output = run(skill, code)</code></li>
+<li id='L58'><code>      assert(!output.failed, output.stderr)</code></li>
+<li id='L59'><code>      val lines = output.stdout.linesIterator.map(ujson.read(_)("special.success")).toVector</code></li>
+<li id='L60'><code>      assertEquals(lines.head("status").str, "passed")</code></li>
+<li id='L61'><code>      assert(lines(1).str.contains("+  const clean"))</code></li>
+<li id='L62'><code>      assertEquals(lines(2).arr.size, 5)</code></li>
+<li id='L63'><code>      assertEquals(os.read(root / "src/word-count.mjs"), fix)</code></li>
+<li id='L64'><code>    }</code></li>
+<li id='L65'><code>  }</code></li>
+<li id='L66'><code></code></li>
+<li id='L67'><code>  test("coding policy failures are fixed errors and trusted factories are rejected") {</code></li>
+<li id='L68'><code>    withWorkshop { (skill, _) =&gt;</code></li>
+<li id='L69'><code>      for (code, expected) &lt;- Seq(</code></li>
+<li id='L70'><code>        "coding.read(\"../credentials\")" -&gt; "PATH_DENIED",</code></li>
+<li id='L71'><code>        "coding.replace(\".github/workflows/ci.yml\", \"\", \"\")" -&gt; "WRITE_DENIED",</code></li>
+<li id='L72'><code>        "coding.replace(\"src/word-count.mjs\", coding.read(\"src/word-count.mjs\"), \"LAB_ONLY_CANARY_7F3A\")" -&gt; "CONTENT_DENIED"</code></li>
+<li id='L73'><code>      ) do</code></li>
+<li id='L74'><code>        val output = run(skill, code)</code></li>
+<li id='L75'><code>        assert(output.failed)</code></li>
+<li id='L76'><code>        assert(output.stderr.contains(expected))</code></li>
+<li id='L77'><code>        assert(!output.stderr.contains("LAB_ONLY_CANARY_7F3A"))</code></li>
+<li id='L78'><code>      val factory = ReplExec.runCode(builtins, skill, "workshop.internal.impl()")</code></li>
+<li id='L79'><code>      factory match</code></li>
+<li id='L80'><code>        case Result.Err(error) =&gt; assert(error.contains("rejectSafe"))</code></li>
+<li id='L81'><code>        case _ =&gt; fail("Trusted coding factory was available to safe code")</code></li>
+<li id='L82'><code>    }</code></li>
+<li id='L83'><code>  }</code></li>
+<li id='L84'><code></code></li>
+<li id='L85'><code>  test("transcript includes every submitted command and separates host invocation") {</code></li>
+<li id='L86'><code>    val filesystem = loaded("skills/filesystem")</code></li>
+<li id='L87'><code>    val text = SkillTranscript.render(builtins, filesystem, "puts(filesystem.pwd())", os.pwd)</code></li>
+<li id='L88'><code>    val expected = Seq(</code></li>
+<li id='L89'><code>      "/capybara-builtins/sigs.jar", "/capybara-builtins/impl.jar", builtins.predef.get,</code></li>
+<li id='L90'><code>      "/filesystem/sigs.jar", "/filesystem/impl.jar", ":settings -language:experimental.safe",</code></li>
+<li id='L91'><code>      "def agentCode_", "puts(filesystem.pwd())", ":settings -language:experimental.captureChecking",</code></li>
+<li id='L92'><code>      "def harnessEntry_", "val __capybara_output", "val __capybara_filesystem", "// HOST invocation"</code></li>
+<li id='L93'><code>    )</code></li>
+<li id='L94'><code>    val positions = expected.map(text.indexOf(_))</code></li>
+<li id='L95'><code>    assert(positions.forall(_ &gt;= 0))</code></li>
+<li id='L96'><code>    assertEquals(positions, positions.sorted)</code></li>
+<li id='L97'><code>    assert(SkillTranscript.render(builtins, filesystem, "puts(1)\n\n").contains("puts(1)\n\n\n()"))</code></li>
+<li id='L98'><code>    assertEquals(SkillTranscript.render(builtins, Skills.Basic, "puts(1)").linesIterator.count(_.startsWith(":jar")), 2)</code></li>
+<li id='L99'><code>    assertEquals(SkillTranscript.render(builtins, builtins, "puts(1)").linesIterator.count(_.startsWith(":jar")), 2)</code></li>
+<li id='L100'><code>    assert(ScalaAgent.availableSkills.exists(_.universe == "coding"))</code></li>
+<li id='L101'><code>  }</code></li>
+<li id='L102'><code></code></li>
+<li id='L103'><code>  test("pure coding transformations reject captured output and coding capabilities") {</code></li>
+<li id='L104'><code>    withWorkshop { (skill, _) =&gt;</code></li>
+<li id='L105'><code>      for code &lt;- Seq(</code></li>
+<li id='L106'><code>        "coding.transformSource(source =&gt; { puts(source); source })",</code></li>
+<li id='L107'><code>        "coding.transformSource(source =&gt; coding.read(\"README.md\"))"</code></li>
+<li id='L108'><code>      ) do</code></li>
+<li id='L109'><code>        assert(ReplExec.runCode(builtins, skill, code).isInstanceOf[Result.Err[?]])</code></li>
+<li id='L110'><code>      val code = os.read(os.pwd / "examples/snippets/coding.scala")</code></li>
+<li id='L111'><code>      val output = run(skill, code)</code></li>
+<li id='L112'><code>      assert(!output.failed, output.stderr)</code></li>
+<li id='L113'><code>      val values = output.stdout.linesIterator.map(ujson.read(_)("special.success")).toVector</code></li>
+<li id='L114'><code>      assertEquals(values(1)("status").str, "failed")</code></li>
+<li id='L115'><code>      assertEquals(values(2)("status").str, "passed")</code></li>
+<li id='L116'><code>    }</code></li>
+<li id='L117'><code>  }</code></li></ol></html>

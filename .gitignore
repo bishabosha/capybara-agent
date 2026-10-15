@@ -11,3 +11,4 @@ out/
 out.txt
 **/.agent-runtime/
 .os-lib-watch-sentinel-*
+**/__pycache__/

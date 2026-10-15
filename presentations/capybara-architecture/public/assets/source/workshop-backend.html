@@ -1,0 +1,372 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>scripts/workshop.py</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>scripts/workshop.py</h1><ol><li id='L1'><code>#!/usr/bin/env python3</code></li>
+<li id='L2'><code>"""Trusted backend for the coding skill. No repository-supplied commands or Python imports."""</code></li>
+<li id='L3'><code>import argparse</code></li>
+<li id='L4'><code>import base64</code></li>
+<li id='L5'><code>import difflib</code></li>
+<li id='L6'><code>import fcntl</code></li>
+<li id='L7'><code>import hashlib</code></li>
+<li id='L8'><code>import json</code></li>
+<li id='L9'><code>import os</code></li>
+<li id='L10'><code>from pathlib import Path</code></li>
+<li id='L11'><code>import re</code></li>
+<li id='L12'><code>import resource</code></li>
+<li id='L13'><code>import shutil</code></li>
+<li id='L14'><code>import signal</code></li>
+<li id='L15'><code>import socket</code></li>
+<li id='L16'><code>import stat</code></li>
+<li id='L17'><code>import subprocess</code></li>
+<li id='L18'><code>import sys</code></li>
+<li id='L19'><code>import tempfile</code></li>
+<li id='L20'><code></code></li>
+<li id='L21'><code>AGENT_ROOT = Path(__file__).resolve().parent.parent</code></li>
+<li id='L22'><code>STARTER = AGENT_ROOT / "presentations/capybara-architecture/workshop/project"</code></li>
+<li id='L23'><code>STATE_DIR = AGENT_ROOT / ".agent-runtime/workshop"</code></li>
+<li id='L24'><code>SOURCE = "src/word-count.mjs"</code></li>
+<li id='L25'><code>READS = frozenset(("README.md", SOURCE, "test/word-count.test.mjs"))</code></li>
+<li id='L26'><code>LIMIT = 16384</code></li>
+<li id='L27'><code>CHECKS = ["environment-cleared", "outside-read-denied", "outside-write-denied",</code></li>
+<li id='L28'><code>          "network-denied", "other-executable-denied"]</code></li>
+<li id='L29'><code>SECRET = re.compile(r"LAB_ONLY_CANARY_|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]{16,}|"</code></li>
+<li id='L30'><code>                    r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bsk-[A-Za-z0-9_-]{16,}|"</code></li>
+<li id='L31'><code>                    r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----")</code></li>
+<li id='L32'><code></code></li>
+<li id='L33'><code></code></li>
+<li id='L34'><code>class Denied(Exception):</code></li>
+<li id='L35'><code>    """Only fixed codes, never original contents, paths, logs or OS error messages."""</code></li>
+<li id='L36'><code></code></li>
+<li id='L37'><code></code></li>
+<li id='L38'><code>def safe_text(value):</code></li>
+<li id='L39'><code>    if not isinstance(value, str) or len(value.encode("utf-8")) &gt; LIMIT:</code></li>
+<li id='L40'><code>        raise Denied("CONTENT_DENIED")</code></li>
+<li id='L41'><code>    if SECRET.search(value) or any(ord(c) &lt; 32 and c not in "\n\r\t" for c in value):</code></li>
+<li id='L42'><code>        raise Denied("CONTENT_DENIED")</code></li>
+<li id='L43'><code>    return value</code></li>
+<li id='L44'><code></code></li>
+<li id='L45'><code></code></li>
+<li id='L46'><code>def state_path(root):</code></li>
+<li id='L47'><code>    return STATE_DIR / (hashlib.sha256(str(root).encode()).hexdigest() + ".json")</code></li>
+<li id='L48'><code></code></li>
+<li id='L49'><code></code></li>
+<li id='L50'><code>def initialize(repo, attach=False):</code></li>
+<li id='L51'><code>    root = Path(repo).expanduser().absolute()</code></li>
+<li id='L52'><code>    if root.is_symlink():</code></li>
+<li id='L53'><code>        raise Denied("PATH_DENIED")</code></li>
+<li id='L54'><code>    root = root.resolve()</code></li>
+<li id='L55'><code>    if root == AGENT_ROOT or AGENT_ROOT in root.parents:</code></li>
+<li id='L56'><code>        raise Denied("PATH_DENIED")</code></li>
+<li id='L57'><code>    templates = {p.relative_to(STARTER).as_posix(): p.read_bytes()</code></li>
+<li id='L58'><code>                 for p in STARTER.rglob("*") if p.is_file()}</code></li>
+<li id='L59'><code>    for rel in READS:</code></li>
+<li id='L60'><code>        safe_text(templates[rel].decode("utf-8"))</code></li>
+<li id='L61'><code>    if attach:</code></li>
+<li id='L62'><code>        # Only the pristine starter is attachable. Ignore real .git metadata, never read it.</code></li>
+<li id='L63'><code>        if not root.is_dir():</code></li>
+<li id='L64'><code>            raise Denied("WORKSPACE_CHANGED")</code></li>
+<li id='L65'><code>        found = set()</code></li>
+<li id='L66'><code>        for directory, dirs, files in os.walk(root, followlinks=False):</code></li>
+<li id='L67'><code>            current = Path(directory)</code></li>
+<li id='L68'><code>            for name in list(dirs):</code></li>
+<li id='L69'><code>                p = current / name</code></li>
+<li id='L70'><code>                if p.is_symlink():</code></li>
+<li id='L71'><code>                    raise Denied("PATH_DENIED")</code></li>
+<li id='L72'><code>                if current == root and name == ".git":</code></li>
+<li id='L73'><code>                    dirs.remove(name)</code></li>
+<li id='L74'><code>            for name in files:</code></li>
+<li id='L75'><code>                p = current / name</code></li>
+<li id='L76'><code>                rel = p.relative_to(root).as_posix()</code></li>
+<li id='L77'><code>                if p.is_symlink() or rel not in templates or p.read_bytes() != templates[rel]:</code></li>
+<li id='L78'><code>                    raise Denied("WORKSPACE_CHANGED")</code></li>
+<li id='L79'><code>                found.add(rel)</code></li>
+<li id='L80'><code>        if found != set(templates):</code></li>
+<li id='L81'><code>            raise Denied("WORKSPACE_CHANGED")</code></li>
+<li id='L82'><code>    else:</code></li>
+<li id='L83'><code>        if root.exists() and any(root.iterdir()):</code></li>
+<li id='L84'><code>            raise Denied("WORKSPACE_CHANGED")</code></li>
+<li id='L85'><code>        root.mkdir(parents=True, exist_ok=True)</code></li>
+<li id='L86'><code>        for rel, data in templates.items():</code></li>
+<li id='L87'><code>            target = root / rel</code></li>
+<li id='L88'><code>            target.parent.mkdir(parents=True, exist_ok=True)</code></li>
+<li id='L89'><code>            target.write_bytes(data)</code></li>
+<li id='L90'><code>    info = root.stat()</code></li>
+<li id='L91'><code>    state = {"root": str(root), "device": info.st_dev, "inode": info.st_ino,</code></li>
+<li id='L92'><code>             "baseline": templates[SOURCE].decode(),</code></li>
+<li id='L93'><code>             "frozen": {rel: templates[rel].decode() for rel in READS if rel != SOURCE}}</code></li>
+<li id='L94'><code>    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)</code></li>
+<li id='L95'><code>    target = state_path(root)</code></li>
+<li id='L96'><code>    # Do not silently reset an existing lab's baseline or trust changed source templates.</code></li>
+<li id='L97'><code>    if target.exists() and json.loads(target.read_text()) != state:</code></li>
+<li id='L98'><code>        raise Denied("WORKSPACE_CHANGED")</code></li>
+<li id='L99'><code>    target.write_text(json.dumps(state))</code></li>
+<li id='L100'><code>    target.chmod(0o600)</code></li>
+<li id='L101'><code>    return str(root)</code></li>
+<li id='L102'><code></code></li>
+<li id='L103'><code></code></li>
+<li id='L104'><code>class Workspace:</code></li>
+<li id='L105'><code>    def __init__(self, repo, node="node"):</code></li>
+<li id='L106'><code>        self.root = Path(repo).expanduser().absolute()</code></li>
+<li id='L107'><code>        if self.root.is_symlink():</code></li>
+<li id='L108'><code>            raise Denied("PATH_DENIED")</code></li>
+<li id='L109'><code>        self.root = self.root.resolve()</code></li>
+<li id='L110'><code>        try:</code></li>
+<li id='L111'><code>            self.state = json.loads(state_path(self.root).read_text())</code></li>
+<li id='L112'><code>            info = self.root.stat()</code></li>
+<li id='L113'><code>            if (self.state["root"], self.state["device"], self.state["inode"]) != (</code></li>
+<li id='L114'><code>                    str(self.root), info.st_dev, info.st_ino):</code></li>
+<li id='L115'><code>                raise Denied("WORKSPACE_CHANGED")</code></li>
+<li id='L116'><code>        except (OSError, ValueError, KeyError):</code></li>
+<li id='L117'><code>            raise Denied("WORKSHOP_NOT_CONFIGURED") from None</code></li>
+<li id='L118'><code>        self.node = node</code></li>
+<li id='L119'><code></code></li>
+<li id='L120'><code>    def parent_fd(self, rel):</code></li>
+<li id='L121'><code>        # Every component is opened relative to an already pinned directory descriptor.</code></li>
+<li id='L122'><code>        # Reject symlinks, devices/FIFOs and hard links rather than following path races.</code></li>
+<li id='L123'><code>        fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)</code></li>
+<li id='L124'><code>        try:</code></li>
+<li id='L125'><code>            info = os.fstat(fd)</code></li>
+<li id='L126'><code>            if (info.st_dev, info.st_ino) != (self.state["device"], self.state["inode"]):</code></li>
+<li id='L127'><code>                raise Denied("WORKSPACE_CHANGED")</code></li>
+<li id='L128'><code>            for part in rel.split("/")[:-1]:</code></li>
+<li id='L129'><code>                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)</code></li>
+<li id='L130'><code>                os.close(fd)</code></li>
+<li id='L131'><code>                fd = child</code></li>
+<li id='L132'><code>            return fd</code></li>
+<li id='L133'><code>        except BaseException:</code></li>
+<li id='L134'><code>            os.close(fd)</code></li>
+<li id='L135'><code>            raise</code></li>
+<li id='L136'><code></code></li>
+<li id='L137'><code>    def read(self, rel):</code></li>
+<li id='L138'><code>        if not isinstance(rel, str) or rel not in READS:</code></li>
+<li id='L139'><code>            raise Denied("PATH_DENIED")</code></li>
+<li id='L140'><code>        parent = None</code></li>
+<li id='L141'><code>        fd = None</code></li>
+<li id='L142'><code>        try:</code></li>
+<li id='L143'><code>            parent = self.parent_fd(rel)</code></li>
+<li id='L144'><code>            fd = os.open(rel.split("/")[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)</code></li>
+<li id='L145'><code>            info = os.fstat(fd)</code></li>
+<li id='L146'><code>            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size &gt; LIMIT:</code></li>
+<li id='L147'><code>                raise Denied("PATH_DENIED")</code></li>
+<li id='L148'><code>            data = os.read(fd, LIMIT + 1).decode("utf-8")</code></li>
+<li id='L149'><code>            if rel in self.state["frozen"] and data != self.state["frozen"][rel]:</code></li>
+<li id='L150'><code>                raise Denied("WORKSPACE_CHANGED")</code></li>
+<li id='L151'><code>            return safe_text(data)</code></li>
+<li id='L152'><code>        except (OSError, UnicodeError):</code></li>
+<li id='L153'><code>            raise Denied("PATH_DENIED") from None</code></li>
+<li id='L154'><code>        finally:</code></li>
+<li id='L155'><code>            if fd is not None:</code></li>
+<li id='L156'><code>                os.close(fd)</code></li>
+<li id='L157'><code>            if parent is not None:</code></li>
+<li id='L158'><code>                os.close(parent)</code></li>
+<li id='L159'><code></code></li>
+<li id='L160'><code>    def replace(self, rel, expected, next_value):</code></li>
+<li id='L161'><code>        if rel != SOURCE:</code></li>
+<li id='L162'><code>            raise Denied("WRITE_DENIED")</code></li>
+<li id='L163'><code>        safe_text(expected)</code></li>
+<li id='L164'><code>        safe_text(next_value)</code></li>
+<li id='L165'><code>        if self.read(rel) != expected:</code></li>
+<li id='L166'><code>            raise Denied("CONTENT_CHANGED")</code></li>
+<li id='L167'><code>        parent = None</code></li>
+<li id='L168'><code>        temp = ".capybara-" + os.urandom(12).hex()</code></li>
+<li id='L169'><code>        try:</code></li>
+<li id='L170'><code>            parent = self.parent_fd(rel)</code></li>
+<li id='L171'><code>            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)</code></li>
+<li id='L172'><code>            with os.fdopen(fd, "wb") as out:</code></li>
+<li id='L173'><code>                out.write(next_value.encode())</code></li>
+<li id='L174'><code>                out.flush()</code></li>
+<li id='L175'><code>                os.fsync(out.fileno())</code></li>
+<li id='L176'><code>            os.replace(temp, rel.split("/")[-1], src_dir_fd=parent, dst_dir_fd=parent)</code></li>
+<li id='L177'><code>        except OSError:</code></li>
+<li id='L178'><code>            raise Denied("WRITE_DENIED") from None</code></li>
+<li id='L179'><code>        finally:</code></li>
+<li id='L180'><code>            if parent is not None:</code></li>
+<li id='L181'><code>                try:</code></li>
+<li id='L182'><code>                    os.unlink(temp, dir_fd=parent)</code></li>
+<li id='L183'><code>                except FileNotFoundError:</code></li>
+<li id='L184'><code>                    pass</code></li>
+<li id='L185'><code>                os.close(parent)</code></li>
+<li id='L186'><code></code></li>
+<li id='L187'><code>    def diff(self):</code></li>
+<li id='L188'><code>        before = safe_text(self.state["baseline"])</code></li>
+<li id='L189'><code>        after = self.read(SOURCE)</code></li>
+<li id='L190'><code>        result = "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True),</code></li>
+<li id='L191'><code>                                            fromfile="a/" + SOURCE, tofile="b/" + SOURCE))</code></li>
+<li id='L192'><code>        return safe_text(result)</code></li>
+<li id='L193'><code></code></li>
+<li id='L194'><code>    def snapshot(self, path):</code></li>
+<li id='L195'><code>        for rel in READS:</code></li>
+<li id='L196'><code>            data = self.read(rel)</code></li>
+<li id='L197'><code>            dest = path / rel</code></li>
+<li id='L198'><code>            dest.parent.mkdir(parents=True, exist_ok=True)</code></li>
+<li id='L199'><code>            dest.write_text(data)</code></li>
+<li id='L200'><code></code></li>
+<li id='L201'><code>    def test(self):</code></li>
+<li id='L202'><code>        with tempfile.TemporaryDirectory(prefix="capybara-test-") as temp:</code></li>
+<li id='L203'><code>            snapshot = Path(temp).resolve() / "project"</code></li>
+<li id='L204'><code>            self.snapshot(snapshot)</code></li>
+<li id='L205'><code>            runner = MacSandbox(self.node, snapshot)</code></li>
+<li id='L206'><code>            runner.checks()</code></li>
+<li id='L207'><code>            # node:test runs when the file is executed directly, without the --test</code></li>
+<li id='L208'><code>            # coordinator spawning another process. Repository code cannot fork.</code></li>
+<li id='L209'><code>            result = runner.run(["test/word-count.test.mjs"])</code></li>
+<li id='L210'><code>            return {"status": "timeout" if result is None else "passed" if result == 0 else "failed"}</code></li>
+<li id='L211'><code></code></li>
+<li id='L212'><code>    def checks(self):</code></li>
+<li id='L213'><code>        with tempfile.TemporaryDirectory(prefix="capybara-check-") as temp:</code></li>
+<li id='L214'><code>            snapshot = Path(temp).resolve() / "project"</code></li>
+<li id='L215'><code>            self.snapshot(snapshot)</code></li>
+<li id='L216'><code>            return MacSandbox(self.node, snapshot).checks()</code></li>
+<li id='L217'><code></code></li>
+<li id='L218'><code></code></li>
+<li id='L219'><code>class MacSandbox:</code></li>
+<li id='L220'><code>    def __init__(self, node, snapshot):</code></li>
+<li id='L221'><code>        executable = shutil.which(node)</code></li>
+<li id='L222'><code>        if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file() or not executable:</code></li>
+<li id='L223'><code>            raise Denied("SANDBOX_UNAVAILABLE")</code></li>
+<li id='L224'><code>        self.node = Path(executable).resolve()</code></li>
+<li id='L225'><code>        self.snapshot = snapshot.resolve()</code></li>
+<li id='L226'><code>        # Node must be a real executable, not a shell shim relying on extra host access.</code></li>
+<li id='L227'><code>        with self.node.open("rb") as executable_file:</code></li>
+<li id='L228'><code>            if executable_file.read(4) not in (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):</code></li>
+<li id='L229'><code>                raise Denied("SANDBOX_UNAVAILABLE")</code></li>
+<li id='L230'><code>        quote = lambda x: json.dumps(str(x), ensure_ascii=False)</code></li>
+<li id='L231'><code>        self.profile = "\n".join([</code></li>
+<li id='L232'><code>            "(version 1)", "(deny default)",</code></li>
+<li id='L233'><code>            f"(allow process-exec (literal {quote(self.node)}))",</code></li>
+<li id='L234'><code>            "(allow sysctl-read)", "(allow mach-lookup)",</code></li>
+<li id='L235'><code>            "(allow file-read-metadata)",</code></li>
+<li id='L236'><code>            # dyld/V8 opens the filesystem root itself during startup. This permits</code></li>
+<li id='L237'><code>            # enumerating /, not reading its descendants or any user's file contents.</code></li>
+<li id='L238'><code>            '(allow file-read-data (literal "/"))',</code></li>
+<li id='L239'><code>            '(allow file-read* (subpath "/System") (subpath "/usr/lib") (subpath "/usr/share"))',</code></li>
+<li id='L240'><code>            f"(allow file-read* (literal {quote(self.node)}) (subpath {quote(self.snapshot)}))",</code></li>
+<li id='L241'><code>            '(allow file-read* file-write* (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom"))',</code></li>
+<li id='L242'><code>        ])</code></li>
+<li id='L243'><code></code></li>
+<li id='L244'><code>    def run(self, args, timeout=8):</code></li>
+<li id='L245'><code>        def limits():</code></li>
+<li id='L246'><code>            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))</code></li>
+<li id='L247'><code>            resource.setrlimit(resource.RLIMIT_CPU, (5, 5))</code></li>
+<li id='L248'><code>            resource.setrlimit(resource.RLIMIT_FSIZE, (1024 * 1024, 1024 * 1024))</code></li>
+<li id='L249'><code>            resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))</code></li>
+<li id='L250'><code>        process = subprocess.Popen(</code></li>
+<li id='L251'><code>            ["/usr/bin/sandbox-exec", "-p", self.profile, str(self.node),</code></li>
+<li id='L252'><code>             "--max-old-space-size=64", *args],</code></li>
+<li id='L253'><code>            cwd=self.snapshot, env={"PATH": "/usr/bin:/bin", "TMPDIR": str(self.snapshot)},</code></li>
+<li id='L254'><code>            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,</code></li>
+<li id='L255'><code>            start_new_session=True, preexec_fn=limits, close_fds=True)</code></li>
+<li id='L256'><code>        try:</code></li>
+<li id='L257'><code>            return process.wait(timeout=timeout)</code></li>
+<li id='L258'><code>        except subprocess.TimeoutExpired:</code></li>
+<li id='L259'><code>            return None</code></li>
+<li id='L260'><code>        finally:</code></li>
+<li id='L261'><code>            # Also reap descendants after their parent exits, including on interruption.</code></li>
+<li id='L262'><code>            try:</code></li>
+<li id='L263'><code>                os.killpg(process.pid, signal.SIGKILL)</code></li>
+<li id='L264'><code>            except ProcessLookupError:</code></li>
+<li id='L265'><code>                pass</code></li>
+<li id='L266'><code>            process.wait()</code></li>
+<li id='L267'><code></code></li>
+<li id='L268'><code>    def checks(self):</code></li>
+<li id='L269'><code>        # Probe a listening local server so a connection error alone cannot fake egress denial.</code></li>
+<li id='L270'><code>        with tempfile.TemporaryDirectory(prefix="capybara-outside-") as temp, socket.socket() as server:</code></li>
+<li id='L271'><code>            outside = Path(temp).resolve() / "sentinel"</code></li>
+<li id='L272'><code>            outside.write_text("LAB_ONLY_CANARY_OUTSIDE")</code></li>
+<li id='L273'><code>            server.bind(("127.0.0.1", 0))</code></li>
+<li id='L274'><code>            server.listen(1)</code></li>
+<li id='L275'><code>            script = r'''</code></li>
+<li id='L276'><code>const fs = require('node:fs');</code></li>
+<li id='L277'><code>const net = require('node:net');</code></li>
+<li id='L278'><code>const cp = require('node:child_process');</code></li>
+<li id='L279'><code>const fail = () =&gt; process.exit(1);</code></li>
+<li id='L280'><code>for (const key of ['HOME','GITHUB_TOKEN','CAPYBARA_API_KEY','OPENAI_API_KEY','NODE_OPTIONS'])</code></li>
+<li id='L281'><code>  if (process.env[key] !== undefined) fail();</code></li>
+<li id='L282'><code>let readDenied = false, writeDenied = false;</code></li>
+<li id='L283'><code>try { fs.readFileSync(process.argv[1]); } catch (e) { readDenied = ['EPERM','EACCES'].includes(e.code); }</code></li>
+<li id='L284'><code>try { fs.writeFileSync(process.argv[1], 'changed'); } catch (e) { writeDenied = ['EPERM','EACCES'].includes(e.code); }</code></li>
+<li id='L285'><code>if (!readDenied || !writeDenied) fail();</code></li>
+<li id='L286'><code>const child = cp.spawnSync('/bin/sh', ['-c', 'exit 0']);</code></li>
+<li id='L287'><code>if (!child.error || !['EPERM','EACCES'].includes(child.error.code)) fail();</code></li>
+<li id='L288'><code>const socket = net.connect({host:'127.0.0.1',port:Number(process.argv[2])});</code></li>
+<li id='L289'><code>socket.on('connect', fail);</code></li>
+<li id='L290'><code>socket.on('error', e =&gt; process.exit(['EPERM','EACCES'].includes(e.code) ? 0 : 1));</code></li>
+<li id='L291'><code>setTimeout(fail, 1500).unref();</code></li>
+<li id='L292'><code>'''</code></li>
+<li id='L293'><code>            result = self.run(["-e", script, str(outside), str(server.getsockname()[1])], timeout=4)</code></li>
+<li id='L294'><code>            if result != 0 or outside.read_text() != "LAB_ONLY_CANARY_OUTSIDE":</code></li>
+<li id='L295'><code>                raise Denied("SANDBOX_UNAVAILABLE")</code></li>
+<li id='L296'><code>        return list(CHECKS)</code></li>
+<li id='L297'><code></code></li>
+<li id='L298'><code></code></li>
+<li id='L299'><code>def rpc(workspace, request):</code></li>
+<li id='L300'><code>    if not isinstance(request, dict):</code></li>
+<li id='L301'><code>        raise Denied("INVALID_REQUEST")</code></li>
+<li id='L302'><code>    op = request.get("op")</code></li>
+<li id='L303'><code>    if op == "read":</code></li>
+<li id='L304'><code>        return workspace.read(request.get("path"))</code></li>
+<li id='L305'><code>    if op == "replace":</code></li>
+<li id='L306'><code>        workspace.replace(request.get("path"), request.get("expected"), request.get("next"))</code></li>
+<li id='L307'><code>        return None</code></li>
+<li id='L308'><code>    if op == "diff":</code></li>
+<li id='L309'><code>        return workspace.diff()</code></li>
+<li id='L310'><code>    if op == "test":</code></li>
+<li id='L311'><code>        return workspace.test()</code></li>
+<li id='L312'><code>    if op == "checks":</code></li>
+<li id='L313'><code>        return workspace.checks()</code></li>
+<li id='L314'><code>    raise Denied("INVALID_REQUEST")</code></li>
+<li id='L315'><code></code></li>
+<li id='L316'><code></code></li>
+<li id='L317'><code>def main():</code></li>
+<li id='L318'><code>    parser = argparse.ArgumentParser(description=__doc__)</code></li>
+<li id='L319'><code>    parser.add_argument("command", choices=["init", "attach", "check", "test", "rpc", "rpc-lines"])</code></li>
+<li id='L320'><code>    parser.add_argument("--repo", required=True, help="Dedicated new lab directory or pristine starter clone")</code></li>
+<li id='L321'><code>    parser.add_argument("--node", default="node", help="Trusted Node executable, not a model argument")</code></li>
+<li id='L322'><code>    args = parser.parse_args()</code></li>
+<li id='L323'><code>    try:</code></li>
+<li id='L324'><code>        if args.command in ("init", "attach"):</code></li>
+<li id='L325'><code>            result = {"root": initialize(args.repo, attach=args.command == "attach")}</code></li>
+<li id='L326'><code>        else:</code></li>
+<li id='L327'><code>            workspace = Workspace(args.repo, args.node)</code></li>
+<li id='L328'><code>            if args.command in ("rpc", "rpc-lines"):</code></li>
+<li id='L329'><code>                raw = sys.stdin.buffer.read(65537)</code></li>
+<li id='L330'><code>                if len(raw) &gt; 65536:</code></li>
+<li id='L331'><code>                    raise Denied("INVALID_REQUEST")</code></li>
+<li id='L332'><code>                if args.command == "rpc-lines":</code></li>
+<li id='L333'><code>                    try:</code></li>
+<li id='L334'><code>                        fields = [base64.b64decode(line, validate=True).decode("utf-8") for line in raw.splitlines()]</code></li>
+<li id='L335'><code>                        count = {"read": 2, "replace": 4, "diff": 1, "test": 1, "checks": 1}</code></li>
+<li id='L336'><code>                        if not fields or len(fields) != count.get(fields[0]):</code></li>
+<li id='L337'><code>                            raise Denied("INVALID_REQUEST")</code></li>
+<li id='L338'><code>                        request = {"op": fields[0]}</code></li>
+<li id='L339'><code>                        request.update(zip(("path", "expected", "next"), fields[1:]))</code></li>
+<li id='L340'><code>                    except (ValueError, UnicodeError):</code></li>
+<li id='L341'><code>                        raise Denied("INVALID_REQUEST") from None</code></li>
+<li id='L342'><code>                else:</code></li>
+<li id='L343'><code>                    request = json.loads(raw)</code></li>
+<li id='L344'><code>                with state_path(workspace.root).open("rb") as lock:</code></li>
+<li id='L345'><code>                    fcntl.flock(lock, fcntl.LOCK_EX)</code></li>
+<li id='L346'><code>                    result = rpc(workspace, request)</code></li>
+<li id='L347'><code>            elif args.command == "check":</code></li>
+<li id='L348'><code>                result = workspace.checks()</code></li>
+<li id='L349'><code>            else:</code></li>
+<li id='L350'><code>                result = workspace.test()</code></li>
+<li id='L351'><code>        if args.command == "rpc-lines":</code></li>
+<li id='L352'><code>            if isinstance(result, dict):</code></li>
+<li id='L353'><code>                result = result["status"]</code></li>
+<li id='L354'><code>            elif isinstance(result, list):</code></li>
+<li id='L355'><code>                result = ",".join(result)</code></li>
+<li id='L356'><code>            print("OK\n" + base64.b64encode((result or "").encode()).decode())</code></li>
+<li id='L357'><code>        else:</code></li>
+<li id='L358'><code>            print(json.dumps({"ok": True, "result": result}))</code></li>
+<li id='L359'><code>    except Denied as error:</code></li>
+<li id='L360'><code>        print("ERROR\n" + str(error) if args.command == "rpc-lines" else json.dumps({"ok": False, "error": str(error)}))</code></li>
+<li id='L361'><code>        return 0 if args.command.startswith("rpc") else 1</code></li>
+<li id='L362'><code>    except Exception:</code></li>
+<li id='L363'><code>        print("ERROR\nWORKSHOP_BACKEND_FAILED" if args.command == "rpc-lines" else json.dumps({"ok": False, "error": "WORKSHOP_BACKEND_FAILED"}))</code></li>
+<li id='L364'><code>        return 0 if args.command.startswith("rpc") else 1</code></li>
+<li id='L365'><code>    return 0</code></li>
+<li id='L366'><code></code></li>
+<li id='L367'><code></code></li>
+<li id='L368'><code>if __name__ == "__main__":</code></li>
+<li id='L369'><code>    sys.exit(main())</code></li></ol></html>

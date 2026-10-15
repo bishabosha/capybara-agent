@@ -1,0 +1,90 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>skills/coding/scripts/Implementation.scala</title><style>body{font:18px/1.5 system-ui;margin:40px;background:#f5f2eb;color:#19242a}
+code{white-space:pre-wrap;overflow-wrap:anywhere}li:target{background:#fff0b3}a{color:#c92f39}li{padding-left:12px}</style>
+<p><a href="/deck/">Back to deck</a></p><h1>skills/coding/scripts/Implementation.scala</h1><ol><li id='L1'><code>//&gt; using file Interface.scala</code></li>
+<li id='L2'><code>package workshop.internal</code></li>
+<li id='L3'><code></code></li>
+<li id='L4'><code>import scala.language.experimental.captureChecking</code></li>
+<li id='L5'><code>import java.nio.charset.StandardCharsets.UTF_8</code></li>
+<li id='L6'><code>import java.nio.file.Path</code></li>
+<li id='L7'><code>import java.util.Base64</code></li>
+<li id='L8'><code>import java.util.concurrent.{CompletableFuture, TimeUnit}</code></li>
+<li id='L9'><code>import scala.util.control.NonFatal</code></li>
+<li id='L10'><code></code></li>
+<li id='L11'><code>/** JDK-only adapter: skills load in an isolated classloader, without host dependencies. */</code></li>
+<li id='L12'><code>private class CodingImpl(root: String, node: String, python: String, hostPath: String)</code></li>
+<li id='L13'><code>    extends workshop.Coding {</code></li>
+<li id='L14'><code>  private class PolicyError(code: String) extends IllegalStateException(code)</code></li>
+<li id='L15'><code>  private val errorCodes = Set(</code></li>
+<li id='L16'><code>    "WORKSHOP_NOT_CONFIGURED", "WORKSPACE_CHANGED", "PATH_DENIED", "WRITE_DENIED",</code></li>
+<li id='L17'><code>    "CONTENT_DENIED", "CONTENT_CHANGED", "SANDBOX_UNAVAILABLE", "INVALID_REQUEST",</code></li>
+<li id='L18'><code>    "WORKSHOP_BACKEND_FAILED"</code></li>
+<li id='L19'><code>  )</code></li>
+<li id='L20'><code></code></li>
+<li id='L21'><code>  private def invoke(operation: String, arguments: String*): String =</code></li>
+<li id='L22'><code>    var child: Process | Null = null</code></li>
+<li id='L23'><code>    try</code></li>
+<li id='L24'><code>      if arguments.exists(_.getBytes(UTF_8).length &gt; 16384) then throw PolicyError("CONTENT_DENIED")</code></li>
+<li id='L25'><code>      val helper = Path.of("").toAbsolutePath.resolve("scripts/workshop.py").toString</code></li>
+<li id='L26'><code>      val builder = new ProcessBuilder(python, "-I", "-S", helper,</code></li>
+<li id='L27'><code>        "rpc-lines", "--repo", root, "--node", node)</code></li>
+<li id='L28'><code>      builder.environment().clear()</code></li>
+<li id='L29'><code>      val _ = builder.environment().put("PATH", hostPath)</code></li>
+<li id='L30'><code>      val _ = builder.redirectError(ProcessBuilder.Redirect.DISCARD)</code></li>
+<li id='L31'><code>      val process = builder.start()</code></li>
+<li id='L32'><code>      child = process</code></li>
+<li id='L33'><code>      val reader = CompletableFuture.supplyAsync(() =&gt; process.getInputStream.readNBytes(65537))</code></li>
+<li id='L34'><code>      val fields = operation +: arguments.toVector</code></li>
+<li id='L35'><code>      val input = fields.map(s =&gt; Base64.getEncoder.encodeToString(s.getBytes(UTF_8))).mkString("", "\n", "\n")</code></li>
+<li id='L36'><code>      val out = process.getOutputStream</code></li>
+<li id='L37'><code>      try out.write(input.getBytes(UTF_8))</code></li>
+<li id='L38'><code>      finally out.close()</code></li>
+<li id='L39'><code>      if !process.waitFor(25, TimeUnit.SECONDS) then throw PolicyError("WORKSHOP_BACKEND_FAILED")</code></li>
+<li id='L40'><code>      val bytes = reader.get(1, TimeUnit.SECONDS)</code></li>
+<li id='L41'><code>      if process.exitValue() != 0 || bytes.length &gt; 65536 then throw PolicyError("WORKSHOP_BACKEND_FAILED")</code></li>
+<li id='L42'><code>      val response = new String(bytes, UTF_8).split("\n", -1)</code></li>
+<li id='L43'><code>      if response.length != 3 || response(2).nonEmpty then throw PolicyError("WORKSHOP_BACKEND_FAILED")</code></li>
+<li id='L44'><code>      if response(0) == "ERROR" then</code></li>
+<li id='L45'><code>        throw PolicyError(if errorCodes(response(1)) then response(1) else "WORKSHOP_BACKEND_FAILED")</code></li>
+<li id='L46'><code>      if response(0) != "OK" then throw PolicyError("WORKSHOP_BACKEND_FAILED")</code></li>
+<li id='L47'><code>      new String(Base64.getDecoder.decode(response(1)), UTF_8)</code></li>
+<li id='L48'><code>    catch</code></li>
+<li id='L49'><code>      case error: PolicyError =&gt; throw error</code></li>
+<li id='L50'><code>      case NonFatal(_) =&gt; throw PolicyError("WORKSHOP_BACKEND_FAILED")</code></li>
+<li id='L51'><code>    finally</code></li>
+<li id='L52'><code>      if child != null then</code></li>
+<li id='L53'><code>        val descendants = child.descendants()</code></li>
+<li id='L54'><code>        try descendants.forEach(handle =&gt; { val _ = handle.destroyForcibly() })</code></li>
+<li id='L55'><code>        finally descendants.close()</code></li>
+<li id='L56'><code>        val _ = child.destroyForcibly()</code></li>
+<li id='L57'><code></code></li>
+<li id='L58'><code>  def read(path: String): String = invoke("read", path)</code></li>
+<li id='L59'><code></code></li>
+<li id='L60'><code>  def replace(path: String, expected: String, next: String): Unit =</code></li>
+<li id='L61'><code>    val _ = invoke("replace", path, expected, next)</code></li>
+<li id='L62'><code></code></li>
+<li id='L63'><code>  def transformSource(f: String -&gt; String): Unit =</code></li>
+<li id='L64'><code>    val before = read("src/word-count.mjs")</code></li>
+<li id='L65'><code>    replace("src/word-count.mjs", before, f(before))</code></li>
+<li id='L66'><code></code></li>
+<li id='L67'><code>  def test(): workshop.TestSummary =</code></li>
+<li id='L68'><code>    val status = invoke("test")</code></li>
+<li id='L69'><code>    if !Set("passed", "failed", "timeout")(status) then throw PolicyError("WORKSHOP_BACKEND_FAILED")</code></li>
+<li id='L70'><code>    workshop.TestSummary(status)</code></li>
+<li id='L71'><code></code></li>
+<li id='L72'><code>  def diff(): String = invoke("diff")</code></li>
+<li id='L73'><code></code></li>
+<li id='L74'><code>  def sandboxChecks(): Seq[String] = invoke("checks").split(",").toVector</code></li>
+<li id='L75'><code>}</code></li>
+<li id='L76'><code></code></li>
+<li id='L77'><code>@caps.rejectSafe</code></li>
+<li id='L78'><code>def impl(): workshop.Coding =</code></li>
+<li id='L79'><code>  val root = sys.env.getOrElse("CAPYBARA_WORKSHOP_ROOT",</code></li>
+<li id='L80'><code>    throw IllegalStateException("WORKSHOP_NOT_CONFIGURED"))</code></li>
+<li id='L81'><code>  configured(root, sys.env.getOrElse("CAPYBARA_WORKSHOP_NODE", "node"),</code></li>
+<li id='L82'><code>    sys.env.getOrElse("CAPYBARA_WORKSHOP_PYTHON", "/usr/bin/python3"))</code></li>
+<li id='L83'><code></code></li>
+<li id='L84'><code>/** Explicit trusted wiring for integration tests and embedding. */</code></li>
+<li id='L85'><code>@caps.rejectSafe</code></li>
+<li id='L86'><code>def configured(root: String, node: String, python: String): workshop.Coding =</code></li>
+<li id='L87'><code>  new CodingImpl(root, node, python, sys.env.getOrElse("PATH", "/usr/bin:/bin"))</code></li></ol></html>

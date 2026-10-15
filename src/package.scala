@@ -10,4 +10,6 @@ package object agent:
         mainargs.ParserForMethods(SkillRunner).runOrExit(args.tail)
       else if args.headOption.contains("skill-ide") then
         mainargs.ParserForMethods(SkillIde).runOrExit(args.tail)
+      else if args.headOption.contains("skill-transcript") then
+        mainargs.ParserForMethods(SkillTranscript).runOrExit(args.tail)
       else mainargs.ParserForMethods(capybara.agent).runOrExit(args)

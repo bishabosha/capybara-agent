@@ -1,0 +1,10 @@
+/* Keep code readable on projection; authored line breaks control Scala layout. */
+.reveal pre { tab-size: 2; }
+.reveal .transcript pre { font-size: .72em; line-height: 1.25; }
+.reveal .transcript pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Absolute cache paths are intentionally kept on one line. */
+.reveal #repl-load pre { font-size: 24px; line-height: 1.5; }
+.reveal #repl-load pre code { white-space: pre; }
+/* Split trusted-entry declaration uses the same readable size on both slides. */
+.reveal #repl-entry pre,
+.reveal #repl-entry-body pre { font-size: 28px; line-height: 1.3; }
