@@ -154,7 +154,17 @@ object Logger:
     }
 
     private def repaintPanels(): Unit =
-      try refreshPanels()
+      try
+        reader match
+          case host: TerminalLineReader => host.takeExecutionSelections().foreach { selection =>
+            val _ = executions.select(selection)
+            val view = executions.snapshot
+            if selection == ExecutionSelection.Newer && view.selectedId == view.records.lastOption.map(_.id) then
+              val _ = executions.select(ExecutionSelection.Latest)
+            panelsDirty = true
+          }
+          case _ => ()
+        refreshPanels()
       catch case NonFatal(error) =>
         // ScheduledExecutor silently cancels periodic tasks after an exception.
         // Keep this task alive and make every stream visible if rendering fails.

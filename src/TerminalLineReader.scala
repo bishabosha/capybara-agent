@@ -15,6 +15,24 @@ final class TerminalLineReader(terminal: Terminal) extends LineReaderImpl(termin
   private var scrollOffset = 0
   private var panelNavigation = PanelNavigation()
   private var panelRanges = Map.empty[String, PanelRange]
+  private var inputFocused = true
+  private val executionSelections = new java.util.concurrent.ConcurrentLinkedQueue[ExecutionSelection]()
+
+  // The logger drains this outside the editor lock; keyboard widgets never call it back.
+  private[agent] def takeExecutionSelections(): Vector[ExecutionSelection] =
+    val selected = Vector.newBuilder[ExecutionSelection]
+    var next = executionSelections.poll()
+    while next != null do
+      selected += next
+      next = executionSelections.poll()
+    selected.result()
+
+  private def navigateExecution(newer: Boolean): Boolean =
+    if viewport.nonEmpty && !inputFocused then
+      if panelNavigation.focus.nonEmpty then
+        executionSelections.add(if newer then ExecutionSelection.Newer else ExecutionSelection.Older)
+      else false
+    else if newer then super.forwardChar() else super.backwardChar()
 
   private def focusable(view: TerminalViewport): Vector[String] =
     view.ui.panels.filter(p => p.content == UiPanelContent.ExecutionCode ||
@@ -39,19 +57,24 @@ final class TerminalLineReader(terminal: Terminal) extends LineReaderImpl(termin
     if viewport.flatMap(_.panelSnapshot).flatMap(_.executions.selectedId) !=
         next.flatMap(_.panelSnapshot).flatMap(_.executions.selectedId) then
       panelNavigation = panelNavigation.copy(starts = Map.empty)
-    if next.isEmpty then panelNavigation = PanelNavigation()
+    if next.isEmpty then
+      panelNavigation = PanelNavigation()
+      inputFocused = true
+      executionSelections.clear()
     else if panelNavigation.focus.exists(id => !next.get.ui.panels.exists(_.id == id)) then
       panelNavigation = panelNavigation.copy(focus = None)
+      inputFocused = true
     viewport = next
     if viewport.nonEmpty then redisplay(true)
   }
 
-  private def scroll(amount: Int): Boolean =
+  private def scroll(amount: Int, page: Boolean = true): Boolean =
     if viewport.nonEmpty then
       panelNavigation.focus.flatMap(panelRanges.get) match
         case Some(range) =>
           val id = panelNavigation.focus.get
-          val start = (range.start - amount.sign * range.page).max(0).min(range.maximum)
+          val distance = if page then amount.sign * range.page else amount
+          val start = (range.start - distance).max(0).min(range.maximum)
           val output = viewport.get.ui.panels.exists(p => p.id == id && p.content == UiPanelContent.ExecutionOutput)
           val starts = if output && start == range.maximum then panelNavigation.starts - id
             else panelNavigation.starts.updated(id, start)
@@ -68,14 +91,16 @@ final class TerminalLineReader(terminal: Terminal) extends LineReaderImpl(termin
     viewport match
       case Some(view) =>
         val choices = focusable(view)
-        val next = target match
+        val next: (Boolean, Option[String]) = target match
           case "cycle" =>
-            val all = Vector(None) ++ choices.map(Some(_))
-            all((all.indexOf(panelNavigation.focus) + 1) % all.size)
-          case "conversation" => None
-          case kind => view.ui.panels.find(p => choices.contains(p.id) &&
-            (if kind == "code" then p.content == UiPanelContent.ExecutionCode else p.content == UiPanelContent.ExecutionOutput)).map(_.id)
-        panelNavigation = panelNavigation.copy(focus = next)
+            val all = Vector((true, None)) ++ choices.map(id => (false, Some(id))) ++ Vector((false, None))
+            all((all.indexOf((inputFocused, panelNavigation.focus)) + 1) % all.size)
+          case "input" => (true, None)
+          case "conversation" => (false, None)
+          case kind => (false, view.ui.panels.find(p => choices.contains(p.id) &&
+            (if kind == "code" then p.content == UiPanelContent.ExecutionCode else p.content == UiPanelContent.ExecutionOutput)).map(_.id))
+        inputFocused = next._1
+        panelNavigation = panelNavigation.copy(focus = next._2)
         redisplay(true)
         true
       case None => false
@@ -96,23 +121,36 @@ final class TerminalLineReader(terminal: Terminal) extends LineReaderImpl(termin
 
   getWidgets.put("capybara-page-up", () => scroll((terminal.getHeight / 2).max(1)))
   getWidgets.put("capybara-page-down", () => scroll(-(terminal.getHeight / 2).max(1)))
-  for target <- Vector("cycle", "conversation", "code", "output") do
+  getWidgets.put("capybara-up", () =>
+    if viewport.nonEmpty && !inputFocused then scroll(1, page = false) else super.upLineOrHistory())
+  getWidgets.put("capybara-down", () =>
+    if viewport.nonEmpty && !inputFocused then scroll(-1, page = false) else super.downLineOrHistory())
+  getWidgets.put("capybara-previous-execution", () => navigateExecution(false))
+  getWidgets.put("capybara-next-execution", () => navigateExecution(true))
+  for target <- Vector("cycle", "input", "conversation", "code", "output") do
     getWidgets.put(s"capybara-focus-$target", () => focusPanel(target))
   getWidgets.put("capybara-top", () => panelBoundary(false))
   getWidgets.put("capybara-bottom", () => panelBoundary(true))
   for (capability, widget) <- Vector((Capability.key_ppage, "capybara-page-up"),
-      (Capability.key_npage, "capybara-page-down")) do
+      (Capability.key_npage, "capybara-page-down"), (Capability.key_up, "capybara-up"),
+      (Capability.key_down, "capybara-down"), (Capability.key_left, "capybara-previous-execution"),
+      (Capability.key_right, "capybara-next-execution")) do
     val key = KeyMap.key(terminal, capability)
     if key != null then getKeyMaps.get(LineReader.MAIN).bind(new Reference(widget), key)
 
-  // ASCII chords work on laptop keyboards even when the terminal consumes Fn
-  // or modified arrow keys. Plain arrows remain JLine command-history controls.
+  // Shift-Tab cycles navigation focus. Arrow keys belong to the focused area.
   for (key, widget) <- Vector(
       ("\u0018p", "capybara-page-up"), ("\u0018n", "capybara-page-down"),
       ("\u0018\u0010", "capybara-page-up"), ("\u0018\u000e", "capybara-page-down"),
       ("\u0018f", "capybara-focus-cycle"), ("\u0018c", "capybara-focus-conversation"),
       ("\u0018e", "capybara-focus-code"), ("\u0018o", "capybara-focus-output"),
       ("\u0018t", "capybara-top"), ("\u0018b", "capybara-bottom"),
+      ("\u001b[Z", "capybara-focus-cycle"), ("\u001b", "capybara-focus-input"),
+      ("\u001b[A", "capybara-up"), ("\u001bOA", "capybara-up"),
+      ("\u001b[B", "capybara-down"), ("\u001bOB", "capybara-down"),
+      ("\u001b[D", "capybara-previous-execution"), ("\u001bOD", "capybara-previous-execution"),
+      ("\u001b[C", "capybara-next-execution"), ("\u001bOC", "capybara-next-execution"),
+      ("\u0010", "capybara-up"), ("\u000e", "capybara-down"),
       ("\u001b[5~", "capybara-page-up"), ("\u001b[6~", "capybara-page-down")) do
     getKeyMaps.get(LineReader.MAIN).bind(new Reference(widget), key)
 
@@ -128,13 +166,17 @@ final class TerminalLineReader(terminal: Terminal) extends LineReaderImpl(termin
         panelRanges = panelRender.map(_.ranges).getOrElse(Map.empty)
         if panelNavigation.focus.exists(id => !panelRanges.contains(id)) then
           panelNavigation = panelNavigation.copy(focus = None)
+          inputFocused = true
         panelNavigation = panelNavigation.copy(starts = panelNavigation.starts.flatMap { (id, _) =>
           panelRanges.get(id).map(range => id -> range.start)
         })
-        val focusLabel = panelNavigation.focus.flatMap(id => view.ui.panels.find(_.id == id)).map(_.title).getOrElse("Conversation")
-        val navigationHint = s"Focus: $focusLabel · Ctrl-X F: switch · P/N: scroll · T/B: top/end"
+        val focusLabel = if inputFocused then "Input" else
+          panelNavigation.focus.flatMap(id => view.ui.panels.find(_.id == id)).map(_.title).getOrElse("Conversation")
+        val navigationHint = if inputFocused then "Focus: Input · ↑/↓: command history · Shift-Tab: switch focus"
+          else if panelNavigation.focus.nonEmpty then s"Focus: $focusLabel · ↑/↓ scroll · ←/→ calls · Shift-Tab switch · Esc input"
+          else s"Focus: $focusLabel · ↑/↓: scroll · Shift-Tab: switch · Esc: input"
         val navigableView = view.copy(panels = panelRender.map(_.lines).getOrElse(view.panels),
-          status = Some(view.status.map(progress => s"Focus: $focusLabel · $progress · Ctrl-X F: switch")
+          status = Some(view.status.map(progress => s"Focus: $focusLabel · $progress · Shift-Tab: switch")
             .getOrElse(navigationHint)))
         val secondary = new java.util.ArrayList[AttributedString]()
         val editing = isReading
@@ -178,5 +220,8 @@ final class TerminalLineReader(terminal: Terminal) extends LineReaderImpl(termin
   }
 
   override protected def doCleanup(newline: Boolean): Unit =
-    if viewport.nonEmpty then scrollOffset = 0
+    if viewport.nonEmpty then
+      scrollOffset = 0
+      inputFocused = true
+      panelNavigation = panelNavigation.copy(focus = None)
     super.doCleanup(if viewport.nonEmpty then false else newline)

@@ -288,16 +288,26 @@ clears execution history; `/reload` preserves it.
 The composer stays at the bottom even when `/split` hides every panel. Keyboard
 focus selects which area scrolls; it leaves the input draft editable.
 
-| Shortcut (release Ctrl+X before the second key) | Action |
+**Shift-Tab** cycles **Input → Executions → Output → Conversation → Input**.
+**↑/↓** scroll one line in the focused panel or conversation; command history
+uses these keys only when **Input** has focus. **Esc** returns focus to Input.
+When **Executions** or **Output** has focus, **←/→** selects the previous/next
+retained execution; both panes switch together and keep their focus. Code starts
+at the beginning and output at the end of the newly selected call. Moving right
+to the newest call resumes following new executions. At the first/last call,
+navigation stops rather than wrapping. In Input, ←/→ still move the text cursor.
+Tab still completes commands. The status row names the current focus.
+Page Up/Down scroll one page in the focused area.
+
+| Optional shortcut (release Ctrl+X before the second key) | Action |
 | --- | --- |
-| **Ctrl+X, then F** | Cycle Conversation → Executions → Output |
+| **Ctrl+X, then F** | Cycle focus, same as Shift-Tab |
 | **Ctrl+X, then C / E / O** | Focus Conversation / Executions / Output directly |
 | **Ctrl+X, then P / N** | Scroll the focused area up / down one page |
 | **Ctrl+X, then T / B** | Jump to the top / end of the focused area |
 
 Page Up/Down also scroll the focused area; on a MacBook these are Fn+↑/↓ if
 the terminal forwards them. Holding Ctrl for the second P/N key also works.
-Plain ↑/↓ continue to browse previous commands, and Tab keeps command completion.
 The focused panel has a `>` marker and visible line range in its title; the
 status row identifies the focus. Code and output keep independent scroll positions.
 Output follows new text at the end; scrolling back holds the current position until
