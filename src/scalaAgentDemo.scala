@@ -91,7 +91,7 @@ private def continueSession(
         case Result.Ok(response) =>
           usageTracker.record(response.usage)
           val updatedHistory = ScalaAgent.appendCollectedChunks(history, response.chunks)
-          if ScalaAgent.hasToolCalls(response.chunks) then
+          if !response.completesToolLoop && ScalaAgent.hasToolCalls(response.chunks) then
             continueSession(
               updatedHistory,
               requestCount + 1,

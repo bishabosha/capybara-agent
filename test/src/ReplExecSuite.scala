@@ -24,6 +24,49 @@ class ReplExecSuite extends munit.FunSuite:
       case Result.Ok(output) => output
       case Result.Err(error) => fail(error)
 
+  test("stdout is observed before execution completes, with ordered UTF-8 channel records") {
+    val first = new java.util.concurrent.CountDownLatch(1)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val events = new java.util.concurrent.ConcurrentLinkedQueue[(ToolOutputChannel, String)]()
+    val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    val running = executor.submit(new java.util.concurrent.Callable[Result[CodeOutput, String]] {
+      def call(): Result[CodeOutput, String] =
+        ReplExec.runCodeObserved(builtins, Seq(Skills.Basic),
+          """puts("first λ😀"); putsErr("warning"); puts("last")""", CancellationToken.Never,
+          (channel, text) => {
+            events.add((channel, text))
+            if channel == ToolOutputChannel.Stdout && text.contains("first") then
+              first.countDown()
+              assert(release.await(10, java.util.concurrent.TimeUnit.SECONDS))
+          })
+    })
+    try
+      assert(first.await(30, java.util.concurrent.TimeUnit.SECONDS))
+      assert(!running.isDone, "output must arrive before the execution result")
+      assert(events.peek()._2.contains("λ😀"))
+      release.countDown()
+      val output = running.get(30, java.util.concurrent.TimeUnit.SECONDS) match
+        case Result.Ok(value) => value
+        case Result.Err(error) => fail(error)
+      import scala.jdk.CollectionConverters.*
+      assertEquals(events.iterator().asScala.map(_._1).toVector,
+        Vector(ToolOutputChannel.Stdout, ToolOutputChannel.Stderr, ToolOutputChannel.Stdout))
+      assertEquals(ReplExec.decodeOutput(output), ScalaToolResult.Success(
+        Vector(ujson.Str("first λ😀"), ujson.Str("last")), Vector(ujson.Str("warning"))))
+    finally
+      release.countDown()
+      val _ = executor.shutdownNow()
+  }
+
+  test("an output observer failure cannot change the captured tool result") {
+    val result = ReplExec.runCodeObserved(builtins, Seq(Skills.Basic), "puts(7)",
+      CancellationToken.Never, (_, _) => throw IllegalStateException("display failed"))
+    result match
+      case Result.Ok(output) => assertEquals(ReplExec.decodeOutput(output),
+        ScalaToolResult.Success(Vector(ujson.Num(7)), Vector.empty))
+      case Result.Err(error) => fail(error)
+  }
+
   test("final values produce no output") {
     assertEquals(execute("List(1, 2, 3).sum"), CodeOutput("", ""))
     assertEquals(ReplExec.decodeOutput(CodeOutput("", "")), ScalaToolResult.NoOutput)

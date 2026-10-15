@@ -61,7 +61,7 @@ object RuntimeStatus:
       def run(): Unit =
         if shouldUpdate() then
           log.setStatus(
-            Some(s"${Console.CYAN}[${appendElapsedAndHeap(label, stopwatch)}]${Console.RESET}")
+            Some(s"[${appendElapsedAndHeap(label, stopwatch)}]")
           )
 
     task.run()

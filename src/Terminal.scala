@@ -1,7 +1,6 @@
 package capybara.agent
 
 import org.jline.reader.{EndOfFileException, UserInterruptException}
-import org.jline.reader.LineReaderBuilder
 import org.jline.terminal.TerminalBuilder
 import scala.util.Using
 import scala.annotation.tailrec
@@ -26,26 +25,23 @@ object Terminal {
         .system(true)
         .build()
 
-    val reader =
-      LineReaderBuilder
-        .builder()
-        .terminal(terminal)
-        .completer(new StringsCompleter(new java.util.function.Supplier[java.util.Collection[String]] {
-          def get(): java.util.Collection[String] = commands().asJava
-        }))
-        .build()
+    val reader = new TerminalLineReader(terminal)
+    reader.setCompleter(new StringsCompleter(new java.util.function.Supplier[java.util.Collection[String]] {
+      def get(): java.util.Collection[String] = commands().asJava
+    }))
 
     @tailrec
     def loop()(using logger: Logger): Unit =
       logger.flush()
       val nextState =
         try
-          reader.readLine(logger.prompt(Prompt)) match
+          reader.readLine(logger.prompt(Prompt), logger.rightPrompt, null: Character, null: String) match
             case null =>
               NextState.Exit
             case line if line.trim.equalsIgnoreCase(":q") =>
               NextState.Exit
             case line =>
+              logger.echoInput(line)
               prompt(line)
         catch
           case _: UserInterruptException =>
@@ -56,14 +52,14 @@ object Terminal {
       if nextState == NextState.Continue then loop()
 
     try
-      terminal.writer.println("Type /help for commands, /x to interrupt, :q to quit. Tab completes commands.")
       Using.resource(Logger.TerminalLogger(reader, terminal.writer, Prompt)) { logger =>
         try
           onStart(using logger)
+          if logger.terminalUi.banner.nonEmpty then logger.print(logger.terminalUi.banner + "\n")
           loop()(using logger)
+          if logger.terminalUi.goodbye.nonEmpty then logger.print(logger.terminalUi.goodbye + "\n")
         finally onClose(using logger)
       }
-      terminal.writer.println("Goodbye!")
     finally terminal.close()
   }
 }

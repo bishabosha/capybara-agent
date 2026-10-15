@@ -2,6 +2,10 @@ package capybara.agent
 
 import java.net.URLClassLoader
 import scala.util.control.NonFatal
+import scalanotation.Readers
+import steps.result.Result
+
+type PluginManifest = (entrypoint: String, classpath: Seq[String])
 
 /** Owns plugin state and class loaders for one interactive session. */
 final class HarnessPlugins private (
@@ -15,6 +19,27 @@ final class HarnessPlugins private (
   require(names.distinct.size == names.size, "Duplicate plugin command")
   require(names.forall(_.matches("[a-z][a-z0-9-]*")), "Invalid plugin command name")
   require(!names.exists(HarnessPlugins.Reserved), "Plugin command conflicts with a built-in command")
+
+  private var currentUi = composeUi().fold(error => throw IllegalArgumentException(error), identity)
+
+  def ui: TerminalUi = synchronized { currentUi }
+
+  /** Reconfigure after plugin commands. Invalid replacement views leave the old UI intact. */
+  def refreshUi(): Either[String, TerminalUi] = synchronized {
+    composeUi().map { replacement =>
+      currentUi = replacement
+      replacement
+    }
+  }
+
+  private def composeUi(): Either[String, TerminalUi] =
+    plugins.foldLeft[Either[String, TerminalUi]](Right(TerminalUi())) { (result, plugin) =>
+      result.flatMap(current => attempt(plugin.id) {
+        val next = plugin.configureUi(current)
+        next.validate()
+        next
+      })
+    }
 
   def commandNames: Vector[String] = names.map("/" + _)
 
@@ -62,8 +87,12 @@ object HarnessPlugins:
 
   def apply(plugins: Vector[HarnessPlugin]): HarnessPlugins = new HarnessPlugins(plugins, Vector.empty)
 
+  def parseManifest(content: String): Result[PluginManifest, String] =
+    Readers.readDeclAs[PluginManifest](content, rootName = "Manifest")
+      .mapErr(error => s"plugin manifest parse error: ${error.format}")
+
   /** Source directories are loaded only when explicitly selected with --plugin-dir.
-    * Each child contains plugin.properties (class=fully.qualified.Class) and Scala sources.
+    * Each child contains a Scala Object Notation Manifest.scala and plugin sources.
     * Compile in a separate JVM so diagnostics never corrupt the interactive prompt.
     */
   def load(directory: Option[os.Path]): Either[String, HarnessPlugins] =
@@ -73,25 +102,35 @@ object HarnessPlugins:
       directory.foreach { root =>
         require(os.isDir(root), s"Plugin directory does not exist: $root")
         os.list(root).filter(os.isDir(_)).sortBy(_.last).foreach { dir =>
-          val properties = new java.util.Properties()
-          val input = java.nio.file.Files.newInputStream((dir / "plugin.properties").toNIO)
-          try properties.load(input)
-          finally input.close()
-          val entry = Option(properties.getProperty("class")).map(_.trim).filter(_.nonEmpty)
-            .getOrElse(throw IllegalArgumentException(s"Missing class in $dir/plugin.properties"))
-          val sources = os.walk(dir).filter(p => os.isFile(p) && p.ext == "scala").sortBy(_.toString)
+          val manifestFile = dir / "Manifest.scala"
+          val manifest = parseManifest(os.read(manifestFile)) match
+            case Result.Ok(value) => value
+            case Result.Err(error) => throw IllegalArgumentException(s"$manifestFile: $error")
+          val entry = manifest.entrypoint.trim
+          require(entry.nonEmpty, s"Missing entrypoint in $manifestFile")
+          val libraries = manifest.classpath.map { configured =>
+            require(configured.nonEmpty, s"Empty classpath entry in $manifestFile")
+            val jar = dir / os.RelPath(configured)
+            require(os.isFile(jar) && jar.ext == "jar", s"Plugin classpath JAR does not exist: $jar")
+            jar
+          }.distinct.toVector
+          val sources = os.walk(dir).filter(p => os.isFile(p) && p.ext == "scala" && p != manifestFile).sortBy(_.toString)
           require(sources.nonEmpty, s"No Scala sources in $dir")
           val output = os.temp.dir(prefix = "capybara-plugin-")
           resources += new AutoCloseable:
             def close(): Unit = os.remove.all(output)
           val classpath = sys.props("java.class.path")
+          val pluginClasspath = (Vector(classpath) ++ libraries.map(_.toString)).mkString(java.io.File.pathSeparator)
           val javaExecutable = os.Path(sys.props("java.home")) / "bin/java"
           val compiled = os.proc(Seq(javaExecutable.toString, "-cp", classpath, "dotty.tools.dotc.Main",
-            "-classpath", classpath, "-d", output.toString) ++ sources.map(_.toString))
+            "-classpath", pluginClasspath, "-d", output.toString) ++ sources.map(_.toString))
             .call(check = false, stderr = os.Pipe)
           require(compiled.exitCode == 0,
             s"Could not compile plugin $dir:\n${compiled.out.text()}${compiled.err.text()}")
-          val loader = new URLClassLoader(Array(output.toNIO.toUri.toURL), classOf[HarnessPlugin].getClassLoader)
+          // Parent-first keeps the host API and Scala runtime shared. Conflicting libraries
+          // must be shaded in plugin JARs; siblings never see one another's library URLs.
+          val loader = new URLClassLoader((Vector(output) ++ libraries).map(_.toNIO.toUri.toURL).toArray,
+            classOf[HarnessPlugin].getClassLoader)
           resources += loader
           val plugin = loader.loadClass(entry).asSubclass(classOf[HarnessPlugin]).getDeclaredConstructor().newInstance()
           plugins += plugin

@@ -7,6 +7,24 @@ class HarnessPluginsSuite extends munit.FunSuite:
     val description = "test extension"
     override val commands = Seq(PluginCommand(command, "test command", (args, _) => PluginAction.Message(args)))
 
+  test("SON manifests have typed entrypoint and classpath fields and are data rather than plugin source") {
+    val manifest = "val Manifest = (entrypoint = \"example.Plugin\", classpath = Vector(\"lib/helper.jar\"))"
+    assertEquals(HarnessPlugins.parseManifest(manifest),
+      steps.result.Result.Ok((entrypoint = "example.Plugin", classpath = Seq("lib/helper.jar"))))
+    assert(HarnessPlugins.parseManifest("val Manifest = (entrypoint = 42, classpath = Vector())").isInstanceOf[steps.result.Result.Err[?]])
+    assert(HarnessPlugins.parseManifest("val Manifest = (entrypoint = \"example.Plugin\", classpath = System.getenv())").isInstanceOf[steps.result.Result.Err[?]])
+    val root = os.temp.dir(prefix = "capybara-plugin-manifest-")
+    try
+      os.makeDir.all(root / "one")
+      os.write(root / "one/Manifest.scala", "val Manifest = (entrypoint = \"One\", classpath = Vector())")
+      assert(HarnessPlugins.load(Some(root)).left.toOption.get.contains("No Scala sources"))
+      os.write.over(root / "one/Manifest.scala", "val Manifest = (entrypoint = \"One\", classpath = Vector(\"lib/missing.jar\"))")
+      assert(HarnessPlugins.load(Some(root)).left.toOption.get.contains("Plugin classpath JAR does not exist"))
+      os.write.over(root / "one/Manifest.scala", "val Manifest = (entrypoint = \" \", classpath = Vector())")
+      assert(HarnessPlugins.load(Some(root)).left.toOption.get.contains("Missing entrypoint"))
+    finally os.remove.all(root)
+  }
+
   test("CLI exposes --plugin-dir and rejects plugins for one-shot queries before contacting a provider") {
     val parser = mainargs.ParserForMethods(capybara.agent)
     assert(parser.helpText().contains("--plugin-dir"))
@@ -104,7 +122,7 @@ class HarnessPluginsSuite extends munit.FunSuite:
       assert(HarnessPlugins.load(Some(root / "missing")).isLeft)
       os.makeDir.all(root / "bad")
       assert(HarnessPlugins.load(Some(root)).isLeft)
-      os.write(root / "bad/plugin.properties", "class=Bad")
+      os.write(root / "bad/Manifest.scala", "val Manifest = (entrypoint = \"Bad\", classpath = Vector())")
       os.write(root / "bad/Bad.scala", "this is invalid Scala!")
       val failed = HarnessPlugins.load(Some(root))
       assert(failed.left.toOption.get.contains("Could not compile plugin"))
@@ -115,5 +133,43 @@ class HarnessPluginsSuite extends munit.FunSuite:
         |  override val commands = Seq(PluginCommand("reload", "override", (_, _) => PluginAction.Message("bad")))
         |""".stripMargin)
       assert(HarnessPlugins.load(Some(root)).left.toOption.get.contains("conflicts with a built-in"))
+    finally os.remove.all(root)
+  }
+
+  test("plugin lib jars are available at compile time and isolated between sibling plugins") {
+    val root = os.temp.dir(prefix = "capybara-plugin-libraries-")
+    val pluginRoot = root / "plugins"
+    try
+      for name <- Vector("one", "two") do
+        val dir = pluginRoot / name
+        val classes = root / s"classes-$name"
+        os.makeDir.all(classes)
+        os.makeDir.all(dir / "lib")
+        // The source filename must match the Java class, so use separate staging directories.
+        val javaSource = classes / "Greeting.java"
+        os.write(javaSource, s"package fixture; public class Greeting { public static String message() { return \"$name\"; } }")
+        val compiler = javax.tools.ToolProvider.getSystemJavaCompiler
+        assert(compiler != null, "This fixture needs the same JDK required to compile source plugins")
+        assertEquals(compiler.run(null, null, null, "-d", classes.toString, javaSource.toString), 0)
+        val jar = new java.util.jar.JarOutputStream(java.nio.file.Files.newOutputStream((dir / "lib/dependency.jar").toNIO))
+        try
+          jar.putNextEntry(new java.util.jar.JarEntry("fixture/Greeting.class"))
+          jar.write(os.read.bytes(classes / "fixture/Greeting.class"))
+          jar.closeEntry()
+        finally jar.close()
+        os.write(dir / "Manifest.scala", "val Manifest = (entrypoint = \"LibraryPlugin\", classpath = Vector(\"lib/dependency.jar\"))")
+        os.write(dir / "LibraryPlugin.scala", s"""import capybara.agent.*
+          |class LibraryPlugin extends HarnessPlugin:
+          |  val id = "$name"
+          |  val description = fixture.Greeting.message()
+          |  override val commands = Seq(PluginCommand("$name", "library test", (_, _) => PluginAction.Message(fixture.Greeting.message())))
+          |""".stripMargin)
+      val runtime = HarnessPlugins.load(Some(pluginRoot)) match
+        case Right(value) => value
+        case Left(error) => fail(error)
+      try
+        assertEquals(runtime.dispatch("/one", context), Some(Right(PluginAction.Message("one"))))
+        assertEquals(runtime.dispatch("/two", context), Some(Right(PluginAction.Message("two"))))
+      finally runtime.close()
     finally os.remove.all(root)
   }

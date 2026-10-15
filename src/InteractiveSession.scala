@@ -21,16 +21,26 @@ final class InteractiveSession(
   private var active = Option.empty[CancellationToken]
   private var thinking = ThinkingInference.ThinkingMode.Auto
   private var closed = false
+  private var completedTurns = 0
   private def context = PluginContext(workspace, history)
 
-  def commandNames: Seq[String] = synchronized {
-    HarnessPlugins.Reserved.toVector.sorted.map("/" + _) ++ plugins.commandNames
-  }
+  @volatile private var completionCommands =
+    HarnessPlugins.Reserved.toVector.sorted.map("/" + _) ++ initialPlugins.commandNames
+
+  // JLine invokes completion under its display lock. Never acquire the session
+  // lock there: completion callbacks and asynchronous output must not deadlock.
+  def commandNames: Seq[String] = completionCommands
 
   private def emit(event: PluginEvent)(using logger: Logger): Unit =
     plugins.emit(event, context).foreach(error => logger.print(s"[plugin error] $error\n"))
 
-  def open()(using Logger): Unit = synchronized {
+  private def updateUiContext()(using logger: Logger): Unit =
+    logger.setUiContext(TerminalUiContext(workspace.toString, completedTurns, thinking.displayName,
+      if active.nonEmpty then "running" else "idle"))
+
+  def open()(using logger: Logger): Unit = synchronized {
+    logger.setUi(plugins.ui)
+    updateUiContext()
     emit(PluginEvent.SessionStarted)
   }
 
@@ -52,7 +62,9 @@ final class InteractiveSession(
 
   private def ready()(using logger: Logger): Unit =
     logger.setStatus(None)
-    logger.print(s"${Console.GREEN}[your turn]${Console.RESET}\n")
+    updateUiContext()
+    if logger.terminalUi.readyMessage.nonEmpty then
+      logger.styled(UiRole.Success, logger.terminalUi.readyMessage + "\n")
 
   def accept(line: String)(using logger: Logger): Terminal.NextState = synchronized {
     if !closed then
@@ -72,6 +84,7 @@ final class InteractiveSession(
               ThinkingInference.ThinkingMode.parse(raw) match
                 case Some(mode) =>
                   thinking = mode
+                  updateUiContext()
                   logger.print(s"thinking mode: ${mode.displayName}\n")
                 case None => logger.print("usage: /think on | /think off | /think auto\n")
         case "/help" =>
@@ -81,6 +94,8 @@ final class InteractiveSession(
         case "/clear" =>
           val _ = cancel()
           history = Vector.empty
+          completedTurns = 0
+          logger.clearConversation()
           logger.print("[conversation cleared]\n")
           ready()
         case "/reload" =>
@@ -91,14 +106,27 @@ final class InteractiveSession(
               emit(PluginEvent.SessionClosed)
               plugins.close()
               plugins = replacement
+              completionCommands = HarnessPlugins.Reserved.toVector.sorted.map("/" + _) ++ plugins.commandNames
+              logger.setUi(plugins.ui)
+              logger.clearPanels()
+              updateUiContext()
               emit(PluginEvent.SessionStarted)
               logger.print("[plugins reloaded]\n")
         case command if command.startsWith("/") =>
           plugins.dispatch(trimmed, context) match
             case None => logger.print(s"Unknown command: $command. Use /help for commands.\n")
             case Some(Left(error)) => logger.print(s"[plugin error] $error\n")
-            case Some(Right(PluginAction.Message(text))) => logger.print(text + "\n")
-            case Some(Right(PluginAction.Submit(prompt))) => submit(prompt)
+            case Some(Right(action)) =>
+              plugins.refreshUi() match
+                case Left(error) => logger.print(s"[plugin error] $error\n")
+                case Right(ui) =>
+                  logger.setUi(ui)
+                  action match
+                    case PluginAction.Message(text) => logger.print(text + "\n")
+                    case PluginAction.Submit(prompt) => submit(prompt)
+                    case PluginAction.ListExecutions => logger.print(logger.executionList + "\n")
+                    case PluginAction.InspectExecution(selection) =>
+                      logger.print(logger.selectExecution(selection).fold(identity, identity) + "\n")
         case _ => submit(line)
     Terminal.NextState.Continue
   }
@@ -110,6 +138,7 @@ final class InteractiveSession(
         val _ = cancel()
         val token = CancellationToken()
         active = Some(token)
+        updateUiContext()
         val think = ThinkingInference.shouldThink(transformed, thinking)
         logger.setStatus(Some(s"[thinking ${if think then "enabled" else "disabled"}, mode=${thinking.displayName}]"))
         emit(PluginEvent.TurnStarted(transformed))
@@ -125,10 +154,11 @@ final class InteractiveSession(
             result match
               case Result.Ok(updated) =>
                 history = updated
+                completedTurns += 1
                 emit(PluginEvent.TurnCompleted)
               case Result.Err("cancelled") => emit(PluginEvent.TurnCancelled)
               case Result.Err(error) =>
-                logger.print(s"${Console.RED}[error] $error${Console.RESET}\n")
+                logger.styled(UiRole.Error, s"[error] $error\n")
                 emit(PluginEvent.TurnFailed(error))
             ready()
         }}

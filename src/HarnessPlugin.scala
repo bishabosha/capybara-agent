@@ -5,6 +5,7 @@ trait HarnessPlugin extends AutoCloseable:
   def id: String
   def description: String
   def commands: Seq[PluginCommand] = Nil
+  def configureUi(current: TerminalUi): TerminalUi = current
   def transformPrompt(prompt: String, context: PluginContext): String = prompt
   def onEvent(event: PluginEvent, context: PluginContext): Unit = ()
   def close(): Unit = ()
@@ -20,6 +21,8 @@ final case class PluginCommand(
 enum PluginAction:
   case Message(text: String)
   case Submit(prompt: String)
+  case ListExecutions
+  case InspectExecution(selection: ExecutionSelection)
 
 enum PluginEvent:
   case SessionStarted, SessionClosed

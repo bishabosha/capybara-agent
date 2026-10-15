@@ -16,8 +16,18 @@ import upickle.jsonschema.JsonSchema
 import scala.deriving.Mirror
 import scala.NamedTuple.AnyNamedTuple
 import scala.util.control.NonFatal
+import scala.concurrent.duration.*
 
 object OllamaClient {
+
+  private[agent] def failureDescription(error: Throwable): String =
+    val seen = scala.collection.mutable.HashSet.empty[Throwable]
+    val causes = Vector.newBuilder[String]
+    var current: Throwable = error
+    while current != null && seen.add(current) do
+      causes += s"${current.getClass.getSimpleName}: ${Option(current.getMessage).filter(_.nonEmpty).getOrElse("no details")}"
+      current = current.getCause
+    causes.result().mkString("; caused by ")
 
   type ToolDefinition =
     (`type`: String, function: (name: String, parameters: ujson.Value, description: String))
@@ -157,11 +167,15 @@ object OllamaClient {
       }
   }
 
-  class ChunkRequest[Chunk](
-      inner: Request[Result[Unit, String]],
+  class ChunkRequest[Chunk] private (
+      execute: () => Result[Unit, String],
       output: ChunkOutput[Chunk],
-      cancellationToken: CancellationToken
+      cancellationToken: CancellationToken,
+      val completesToolLoop: Boolean
   ):
+    def this(inner: Request[Result[Unit, String]], output: ChunkOutput[Chunk], cancellationToken: CancellationToken) =
+      this(() => inner.send().body, output, cancellationToken, false)
+
     def send(
         listeners: ChunkOutput.ChunkReader[Chunk]*
     )(using ExecutionContext): Future[Result[Unit, String]] =
@@ -172,23 +186,30 @@ object OllamaClient {
         Future {
           blocking {
             listeners.foreach(output.registerListener)
-            inner.send().body
+            execute()
           }
         }.recover {
           case NonFatal(error) =>
             val message =
               if cancellationToken.isCancelled then "cancelled"
-              else s"request failed: ${error.getMessage}"
+              else s"request failed: ${failureDescription(error)}"
             output.fail(message)
             Result.Err(message)
         }
       else Future.failed(new java.io.IOException("output already done"))
+
+  object ChunkRequest:
+    /** Optional transports start only when send is called, with the normal cancellation path. */
+    def local[C](output: ChunkOutput[C], cancellationToken: CancellationToken,
+        completesToolLoop: Boolean = false)(execute: => Result[Unit, String]): ChunkRequest[C] =
+      new ChunkRequest(() => execute, output, cancellationToken, completesToolLoop)
 
   enum Chunk[+T] {
     case Content(content: String)
     case Thinking(thinking: String)
     case Tools(toolCalls: Vector[ToolCall[T]])
     case ResponseItems(items: Vector[ujson.Value])
+    case ProviderState(provider: String, state: ujson.Value)
   }
 
   enum ResolvedChunk[+T, +R] {
@@ -196,17 +217,20 @@ object OllamaClient {
     case Thinking(thinking: String) extends ResolvedChunk[Nothing, Nothing]
     case Tools(toolCalls: Vector[(ToolCall[T], R)]) extends ResolvedChunk[T, R]
     case ResponseItems(items: Vector[ujson.Value]) extends ResolvedChunk[Nothing, Nothing]
+    case ProviderState(provider: String, state: ujson.Value) extends ResolvedChunk[Nothing, Nothing]
   }
 
   final case class ToolCall[+T](
       name: String,
       arguments: T,
-      id: Option[String] = None
+      id: Option[String] = None,
+      resultSink: Option[String => Unit] = None
   )
 
   final case class ChatMessage(
       json: ujson.Value,
-      responseItems: Option[Vector[ujson.Value]] = None
+      responseItems: Option[Vector[ujson.Value]] = None,
+      providerState: Map[String, ujson.Value] = Map.empty
   )
 
   object ChatMessage {
@@ -358,6 +382,9 @@ object OllamaClient {
       )
     val req = quickRequest
       .post(uri"http://localhost:11434/api/chat")
+      // Cold model loading and prompt evaluation can take longer than the HTTP default.
+      .readTimeout(sys.env.get("CAPYBARA_OLLAMA_TIMEOUT_SECONDS").flatMap(_.toLongOption)
+        .filter(_ > 0).getOrElse(600L).seconds)
       .body(
         write(
           bodyObj
