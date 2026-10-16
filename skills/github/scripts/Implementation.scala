@@ -1,7 +1,7 @@
 //> using file Interface.scala
 //> using repository ivy2local
-//> using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"
-package githubskill.internal
+//> using dep "dev.capybara.skills::filesystem-api:0.1.0-SNAPSHOT"
+package capybara.skills.github.internal
 
 import scala.language.experimental.captureChecking
 import java.net.{URI, Proxy, ProxySelector, SocketAddress}
@@ -135,7 +135,7 @@ private object Wire:
     if at != source.length then invalid()
     result
 
-private class GitHubImpl(repository: String, base: String, token: String, endpoint: String) extends githubskill.GitHub:
+private class GitHubImpl(repository: String, base: String, token: String, endpoint: String) extends capybara.skills.github.GitHub:
   import Wire.*
   import Wire.Value.*
   private class PolicyError(code: String) extends IllegalStateException(code)
@@ -199,30 +199,30 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
     name
   private def head(name: String, operation: String = "READ_BRANCH"): String =
     validSha(request("GET", "/git/ref/heads/" + name, operation = operation)("object")("sha").text)
-  private def current(branch: githubskill.Branch): Unit =
+  private def current(branch: capybara.skills.github.Branch): Unit =
     requirePolicy(head(topic(branch.name)) == validSha(branch.commit), "BRANCH_CHANGED")
 
-  def lookupIssue(number: Int): githubskill.Issue =
+  def lookupIssue(number: Int): capybara.skills.github.Issue =
     requirePolicy(number > 0, "INVALID_REQUEST")
     val item = request("GET", s"/issues/$number", operation = "LOOKUP_ISSUE")
     requirePolicy(item("number").integer == number && item.get("pull_request").isEmpty, "INVALID_RESPONSE")
     val body = item.get("body").filter(_ != Null).map(_.text).getOrElse("")
-    githubskill.Issue(number, publicText(item("title").text, 4096), publicText(body),
+    capybara.skills.github.Issue(number, publicText(item("title").text, 4096), publicText(body),
       s"https://github.com/$repository/issues/$number")
 
-  def listIssues(page: Int): Seq[githubskill.IssueSummary] =
+  def listIssues(page: Int): Seq[capybara.skills.github.IssueSummary] =
     requirePolicy(page > 0 && page <= 1000, "INVALID_REQUEST")
     val items = request("GET", s"/issues?state=open&per_page=25&page=$page", operation = "LIST_ISSUES").items
     requirePolicy(items.size <= 25, "INVALID_RESPONSE")
     items.filter(_.get("pull_request").isEmpty).map { item =>
       val n = item("number").integer
       requirePolicy(n > 0, "INVALID_RESPONSE")
-      githubskill.IssueSummary(n, publicText(item("title").text, 4096), s"https://github.com/$repository/issues/$n")
+      capybara.skills.github.IssueSummary(n, publicText(item("title").text, 4096), s"https://github.com/$repository/issues/$n")
     }
 
-  def branch(name: String): githubskill.Branch = githubskill.Branch(topic(name), head(topic(name)))
+  def branch(name: String): capybara.skills.github.Branch = capybara.skills.github.Branch(topic(name), head(topic(name)))
 
-  def createBranch(name: String): githubskill.Branch =
+  def createBranch(name: String): capybara.skills.github.Branch =
     topic(name)
     val commit = head(base, "READ_BASE_BRANCH")
     try
@@ -238,10 +238,10 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
           case Some(_) => throw PolicyError("BRANCH_ALREADY_EXISTS: the topic has a different head from the base. " +
             "Choose a fresh topic name, or explicitly continue it with branch(name).")
           case None => throw rejected
-    githubskill.Branch(name, commit)
+    capybara.skills.github.Branch(name, commit)
 
-  def commit(branch: githubskill.Branch, message: String, paths: Seq[String])
-      (using files: editing.TextFiles): githubskill.Branch =
+  def commit(branch: capybara.skills.github.Branch, message: String, paths: Seq[String])
+      (using files: capybara.skills.filesystem.FileSystem): capybara.skills.github.Branch =
     publicText(message, 4096)
     requirePolicy(message.trim.nonEmpty && paths.nonEmpty && paths.size <= 64 && paths.distinct.size == paths.size, "INVALID_REQUEST")
     val changes = paths.map { path =>
@@ -258,9 +258,9 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
     val commit = validSha(request("POST", "/git/commits", obj("message" -> Str(message),
       "tree" -> Str(tree), "parents" -> Arr(Vector(Str(branch.commit)))), operation = "CREATE_COMMIT")("sha").text)
     val _ = request("PATCH", "/git/refs/heads/" + branch.name, obj("sha" -> Str(commit), "force" -> Bool(false)), operation = "UPDATE_BRANCH")
-    githubskill.Branch(branch.name, commit)
+    capybara.skills.github.Branch(branch.name, commit)
 
-  def createPullRequest(branch: githubskill.Branch, title: String, body: String): githubskill.PullRequest =
+  def createPullRequest(branch: capybara.skills.github.Branch, title: String, body: String): capybara.skills.github.PullRequest =
     publicText(title, 256)
     publicText(body)
     requirePolicy(title.trim.nonEmpty, "INVALID_REQUEST")
@@ -276,9 +276,9 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
       "draft" -> Bool(true), "maintainer_can_modify" -> Bool(false)), operation = "CREATE_PULL_REQUEST"))
     val number = item("number").integer
     requirePolicy(number > 0, "INVALID_RESPONSE")
-    githubskill.PullRequest(number, s"https://github.com/$repository/pull/$number")
+    capybara.skills.github.PullRequest(number, s"https://github.com/$repository/pull/$number")
 
-  def checks(branch: githubskill.Branch): githubskill.CheckSummary =
+  def checks(branch: capybara.skills.github.Branch): capybara.skills.github.CheckSummary =
     current(branch)
     val statuses = request("GET", s"/commits/${branch.commit}/status?per_page=100", operation = "READ_COMMIT_STATUS")
     val checks = request("GET", s"/commits/${branch.commit}/check-runs?per_page=100", operation = "READ_CHECK_RUNS")
@@ -289,17 +289,17 @@ private class GitHubImpl(repository: String, base: String, token: String, endpoi
       r.get("conclusion").filter(_ != Null).exists(c => Set("failure", "cancelled", "timed_out", "action_required")(c.text)))
     val passed = (runs.nonEmpty || count > 0) && (count == 0 || statuses("state").text == "success") &&
       runs.forall(r => r("head_sha").text == branch.commit && r("status").text == "completed" && r("conclusion").text == "success")
-    githubskill.CheckSummary(branch.commit, if failed then "failed" else if passed then "passed" else "pending")
+    capybara.skills.github.CheckSummary(branch.commit, if failed then "failed" else if passed then "passed" else "pending")
 
   override def toString: String = "GitHub(<capability>)"
 
 @caps.rejectSafe
-def impl(): githubskill.GitHub =
+def impl(): capybara.skills.github.GitHub =
   val repository = sys.env.getOrElse("CAPYBARA_GITHUB_REPOSITORY", throw IllegalStateException("NOT_CONFIGURED"))
   val token = sys.env.getOrElse("CAPYBARA_GITHUB_TOKEN", throw IllegalStateException("AUTH_FAILED"))
   configured(repository, sys.env.getOrElse("CAPYBARA_GITHUB_BASE", "main"), token, "https://api.github.com")
 
 /** Only trusted wiring can replace the endpoint, e.g. a deterministic test server. */
 @caps.rejectSafe
-def configured(repository: String, base: String, token: String, endpoint: String): githubskill.GitHub =
+def configured(repository: String, base: String, token: String, endpoint: String): capybara.skills.github.GitHub =
   new GitHubImpl(repository, base, token, endpoint)

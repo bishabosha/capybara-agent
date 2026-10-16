@@ -12,66 +12,68 @@ class SkillCompositionSuite extends munit.FunSuite:
 
   test("tool arguments support arrays and legacy single-universe calls") {
     val modern = upickle.default.read[ScalaAgent.ScalaToolCall](
-      """{"universes":["coding","filesystem"],"scala_code":"()"}""")
-    assertEquals(modern.requestedUniverses, Seq("coding", "filesystem"))
+      """{"universes":["editing","filesystem"],"scala_code":"()"}""")
+    assertEquals(modern.requestedUniverses, Seq("editing", "filesystem"))
     val legacy = upickle.default.read[ScalaAgent.ScalaToolCall](
       """{"universe":"basic","scala_code":"puts(1)"}""")
     assertEquals(legacy.requestedUniverses, Seq("basic"))
   }
 
   test("dependency resolution orders capabilities, deduplicates and rejects invalid graphs") {
-    val coding = loaded("skills/coding")
     val filesystem = loaded("skills/filesystem")
-    val dependent = filesystem.copy(requires = Seq("coding"))
-    assertEquals(Skills.resolve(Seq("filesystem", "coding", "filesystem"), Seq(dependent, coding), builtins),
-      Result.Ok(Vector(coding, dependent)))
-    val typeOnly = filesystem.copy(apiDependencies = Seq("coding"))
-    assertEquals(Skills.resolve(Seq("filesystem"), Seq(typeOnly, coding), builtins), Result.Ok(Vector(typeOnly)))
-    assertEquals(Skills.resolve(Seq("filesystem"), Seq(typeOnly, coding), builtins, includeApis = true),
-      Result.Ok(Vector(coding, typeOnly)))
-    assert(Skills.resolve(Seq("missing"), Seq(coding), builtins).isInstanceOf[Result.Err[?]])
-    assert(Skills.resolve(Seq("coding"), Seq(coding.copy(requires = Seq("coding"))), builtins)
+    val editing = loaded("skills/editing")
+    assertEquals(editing.requires, Seq("filesystem"))
+    assertEquals(editing.apiDependencies, Seq("filesystem"))
+    assertEquals(Skills.resolve(Seq("editing", "filesystem", "editing"), Seq(editing, filesystem), builtins),
+      Result.Ok(Vector(filesystem, editing)))
+    val typeOnly = editing.copy(requires = Nil)
+    assertEquals(Skills.resolve(Seq("editing"), Seq(typeOnly, filesystem), builtins), Result.Ok(Vector(typeOnly)))
+    assertEquals(Skills.resolve(Seq("editing"), Seq(typeOnly, filesystem), builtins, includeApis = true),
+      Result.Ok(Vector(filesystem, typeOnly)))
+    assert(Skills.resolve(Seq("missing"), Seq(editing), builtins).isInstanceOf[Result.Err[?]])
+    assert(Skills.resolve(Seq("editing"), Seq(editing, filesystem.copy(requires = Seq("editing"))), builtins)
       .isInstanceOf[Result.Err[?]])
-    assert(Skills.resolve(Seq("coding", "filesystem"), Seq(coding,
-      filesystem.copy(bindings = coding.bindings)), builtins).isInstanceOf[Result.Err[?]])
+    assert(Skills.resolve(Seq("editing", "filesystem"), Seq(editing,
+      filesystem.copy(bindings = editing.bindings)), builtins).isInstanceOf[Result.Err[?]])
   }
 
   test("a dependent skill uses a locally published safe API and the harness injects both capabilities") {
     val root = os.temp.dir(prefix = "capybara-composition-")
     try
       os.write(root / "note.txt", "hello")
-      val coding = loaded("skills/coding")
-      val configured = coding.copy(bindings = coding.bindings.map(b =>
-        (name = b.name, tpe = b.tpe, value = s"editing.internal.configured(${ujson.write(root.toString)})")))
-      val adapter = Skill(name = "composition-test", description = "Read through the safe editing API",
+      val filesystem = loaded("skills/filesystem")
+      val editing = loaded("skills/editing")
+      val configured = filesystem.copy(bindings = filesystem.bindings.map(b =>
+        (name = b.name, tpe = b.tpe, value = s"capybara.skills.filesystem.internal.configured(${ujson.write(root.toString)})")))
+      val adapter = Skill(name = "composition-test", description = "Read through the safe filesystem API",
         universe = "composition-test", interface = """//> using repository ivy2local
-          |//> using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"
+          |//> using dep "dev.capybara.skills::filesystem-api:0.1.0-SNAPSHOT"
           |package composition
           |import scala.language.experimental.captureChecking
-          |trait ReadNote extends caps.SharedCapability { def note()(using editing.TextFiles): String }
+          |trait ReadNote extends caps.SharedCapability { def note()(using capybara.skills.filesystem.FileSystem): String }
           |""".stripMargin,
         code = """//> using repository ivy2local
-          |//> using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"
+          |//> using dep "dev.capybara.skills::filesystem-api:0.1.0-SNAPSHOT"
           |package composition.internal
           |import scala.language.experimental.captureChecking
           |@caps.rejectSafe
           |def impl(): composition.ReadNote = new composition.ReadNote {
-          |  def note()(using files: editing.TextFiles): String = files.read("note.txt")
+          |  def note()(using files: capybara.skills.filesystem.FileSystem): String = files.read("note.txt")
           |}
           |""".stripMargin,
         api = "Read a note", predef = None,
         bindings = Seq((name = "notes", tpe = "composition.ReadNote", value = "composition.internal.impl()")),
-        requires = Seq("coding"))
-      val output = ReplExec.runCode(builtins, Seq(adapter, configured),
-        "coding.edit(\"note.txt\")(_ + \"!\"); puts(notes.note())", CancellationToken.Never) match
+        requires = Seq("filesystem"))
+      val output = ReplExec.runCode(builtins, Seq(adapter, configured, editing),
+        "editing.edit(\"note.txt\")(_ + \"!\"); puts(notes.note())", CancellationToken.Never) match
         case Result.Ok(value) => value
         case Result.Err(error) => fail(error)
       assert(!output.failed, output.stderr)
       assertEquals(ujson.read(output.stdout)("special.success").str, "hello!")
-      val rejected = ReplExec.runCode(builtins, Seq(adapter, configured),
-        "coding.edit(\"note.txt\")(text => notes.note())", CancellationToken.Never)
+      val rejected = ReplExec.runCode(builtins, Seq(adapter, configured, editing),
+        "editing.edit(\"note.txt\")(text => notes.note())", CancellationToken.Never)
       assert(rejected.isInstanceOf[Result.Err[?]])
-      assertEquals(SkillArtifacts.dependencies(adapter.code), Seq("coding"))
+      assertEquals(SkillArtifacts.dependencies(adapter.code), Seq("filesystem"))
     finally os.remove.all(root)
   }
 
@@ -82,8 +84,8 @@ class SkillCompositionSuite extends munit.FunSuite:
     }
     val output = bytes.toString(java.nio.charset.StandardCharsets.UTF_8)
     assert(output.contains("//> using repository ivy2local"))
-    val coding = output.indexOf("dev.capybara.skills::coding-api:0.1.0-SNAPSHOT")
+    val filesystem = output.indexOf("dev.capybara.skills::filesystem-api:0.1.0-SNAPSHOT")
     val github = output.indexOf("dev.capybara.skills::github-api:0.1.0-SNAPSHOT")
-    assert(coding >= 0 && github > coding, output)
+    assert(filesystem >= 0 && github > filesystem, output)
     assert(!output.contains("CAPYBARA_GITHUB_TOKEN"))
   }

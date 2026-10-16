@@ -7,10 +7,11 @@
 ```scala
 def agentCode(
     using output: builtins.OutputStreams,
-    coding: editing.TextFiles
+    filesystem: capybara.skills.filesystem.FileSystem,
+    editing: capybara.skills.editing.TextEditor
 ): Unit = {
-  coding.edit("README.md")(_.replace("Old", "New"))
-  puts(coding.read("README.md"))
+  editing.edit("README.md")(_.replace("Old", "New"))
+  puts(filesystem.read("README.md"))
 }
 ```
 

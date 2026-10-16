@@ -1,8 +1,8 @@
 val Manifest = (
   universe = "secrets",
-  api = "The harness supplies secretAccess: secrets.SecretsInterface as a capability parameter.",
+  api = "The harness supplies secrets: capybara.skills.secrets.SecretAccess as a capability parameter.",
   predef = "",
   bindings = Vector(
-    (name = "secretAccess", tpe = "secrets.SecretsInterface", value = "secrets.internal.impl()")
+    (name = "secrets", tpe = "capybara.skills.secrets.SecretAccess", value = "capybara.skills.secrets.internal.impl()")
   )
 )

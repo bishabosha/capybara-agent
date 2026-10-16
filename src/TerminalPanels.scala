@@ -64,9 +64,12 @@ final class TerminalPanels(val capacity: Int = 16384):
         s"[${chunk.channel.label}] ${chunk.text}").mkString).getOrElse("")
     val title = panel.content match
       case UiPanelContent.Streams => s"${panel.title} · ${context.state}"
-      case _ => selected.map(record => s"${panel.title} #${record.id} · ${record.state.toString.toLowerCase}")
+      case _ => selected.map(record =>
+        val name = if record.toolName == "run_scala_code" then "" else s" · ${record.toolName}"
+        s"${panel.title} #${record.id} · ${record.state.toString.toLowerCase}$name")
         .getOrElse(panel.title + " · no executions")
-    val lines = if panel.content == UiPanelContent.ExecutionCode && text.nonEmpty then
+    val lines = if panel.content == UiPanelContent.ExecutionCode && text.nonEmpty &&
+        selected.exists(_.toolName == "run_scala_code") then
       ScalaSyntaxHighlight.highlight(text, ui).columnSplitLength(width).asScala.toVector
     else text.split("\n", -1).toVector.filter(_.nonEmpty).flatMap { line =>
       new AttributedString(cleanLine(line)).columnSplitLength(width).asScala

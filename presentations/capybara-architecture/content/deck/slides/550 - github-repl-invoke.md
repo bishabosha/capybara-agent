@@ -7,7 +7,7 @@
 ```scala
   try {
     agentCode_00000000_0000_0000_0000_000000000001(
-      using __capybara_output, __capybara_coding, __capybara_github
+      using __capybara_output, __capybara_filesystem, __capybara_github
     )
     true
   } catch {

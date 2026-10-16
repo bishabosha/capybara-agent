@@ -6,7 +6,6 @@ import capybara.agent.OllamaClient.ChunkOutputState
 import os.pwd
 import steps.result.Result
 import upickle.default.*
-import upickle.implicits.namedTuples.default.given
 import upickle.jsonschema.*
 
 import scala.concurrent.ExecutionContext
@@ -20,13 +19,61 @@ import ReplExec.ScalaToolResult
 
 object ScalaAgent {
 
-  case class ScalaToolCall(universe: String = "basic", scala_code: String, universes: Seq[String] = Nil) derives ReadWriter:
+  sealed trait ToolArguments
+
+  case class ScalaToolCall(universe: String = "basic", scala_code: String, universes: Seq[String] = Nil) extends ToolArguments:
     def requestedUniverses: Seq[String] =
       if universes.nonEmpty then universes else universe.split(",").map(_.trim).filter(_.nonEmpty).toSeq
-  type ScalaResolvedChunk = ResolvedChunk[ScalaToolCall, ScalaToolResult]
+  case class SkillNames(universes: Seq[String] = Nil) extends ToolArguments
+
+  // Concrete children of a sealed trait also get tagged codecs from `derives`.
+  // Tool arguments are ordinary JSON objects: the tool name selects their type.
+  object ScalaToolCall:
+    given ReadWriter[ScalaToolCall] = readwriter[ujson.Value].bimap[ScalaToolCall](
+      call => ujson.Obj(
+        "universe" -> call.universe,
+        "scala_code" -> call.scala_code,
+        "universes" -> writeJs(call.universes)
+      ),
+      value => ScalaToolCall(
+        universe = value.obj.get("universe").map(_.str).getOrElse("basic"),
+        scala_code = value("scala_code").str,
+        universes = value.obj.get("universes").map(_.arr.iterator.map(_.str).toVector).getOrElse(Vector.empty)
+      )
+    )
+
+  object SkillNames:
+    given ReadWriter[SkillNames] = readwriter[ujson.Value].bimap[SkillNames](
+      names => ujson.Obj("universes" -> writeJs(names.universes)),
+      value => SkillNames(value.obj.get("universes").map(_.arr.iterator.map(_.str).toVector).getOrElse(Vector.empty))
+    )
+
+  object ToolArguments:
+    // Keep wire arguments free of sealed-trait discriminator fields.
+    given ReadWriter[ToolArguments] = readwriter[ujson.Value].bimap[ToolArguments](
+      {
+        case call: ScalaToolCall => writeJs(call)
+        case names: SkillNames => writeJs(names)
+      },
+      value => if value.obj.contains("scala_code") then read[ScalaToolCall](value) else read[SkillNames](value)
+    )
+
+  private def executionParser: ReadWriter[ToolArguments] =
+    readwriter[ScalaToolCall].bimap[ToolArguments](
+      { case call: ScalaToolCall => call; case _ => throw IllegalArgumentException("Expected Scala code") },
+      call => call
+    )
+
+  private def discoveryParser: ReadWriter[ToolArguments] =
+    readwriter[SkillNames].bimap[ToolArguments](
+      { case names: SkillNames => names; case _ => throw IllegalArgumentException("Expected skill names") },
+      names => names
+    )
+
+  type ScalaResolvedChunk = ResolvedChunk[ToolArguments, ScalaToolResult]
   final case class AgentResponse(chunks: Seq[ScalaResolvedChunk], usage: OllamaClient.Usage,
       completesToolLoop: Boolean = false)
-  private type RawScalaChunk = (Int, Chunk[ScalaToolCall])
+  private type RawScalaChunk = (Int, Chunk[ToolArguments])
   private final case class RawAgentResponse(chunks: Seq[RawScalaChunk], usage: OllamaClient.Usage)
 
   private val skillsDir = pwd / "skills"
@@ -60,55 +107,67 @@ object ScalaAgent {
   val availableSkills = Skills.Basic +: skills
   val builtinSkill =
     Skills.loadAll(builtinSkillsDir).filter(_.universe == "capybara-builtins").head
-  val SystemPrompt = {
-    s"""|## TOOL CALLING:
-        |You only have access to the `run_scala_code` tool.
-        |All actions requested by the user are executed using this tool.
-        |
-        |### Execution Discipline:
-        |
-        |When the user asks for a straightforward calculation, data transformation, or standard-library-only answer, immediately call `run_scala_code` with `universe = "basic"`.
-        |For `basic` tasks, spend no more than a few tokens deciding; do not reason step-by-step internally.
-        |Do not first explain that you will call the tool.
-        |Never write pre-tool narration such as "I will execute", "I will call the tool", "One detail", or notes about whether standard library methods are available.
-        |If you are about to say that you will execute code, do not say it; make the tool call instead.
-        |If you have already said an intent-to-execute sentence once, never repeat it; make the tool call or ask one concise clarification question.
-        |Do not repeat the same sentence, paragraph, tool-call intent, or reasoning fragment. If you notice repetition, stop immediately and either make the tool call, ask one concise clarification question, or provide the final answer.
-        |Never intentionally produce an infinite loop. Every response should make progress toward a tool call, a clarification question, or the final answer.
-        |Do not put Scala code in a markdown code block unless the user explicitly asked to see code.
-        |Do not deliberate over algorithm choices for small basic tasks; choose the simplest correct implementation and execute it.
-        |For simple sequence requests, generate exactly the requested amount of data unless the user asks for more.
-        |For follow-up requests, infer omitted nouns and context from the conversation history when the reference is clear.
-        |Treat vague quality words like "optimized", "fast", "clean", or "simple" as preferences, not new requirements, unless the user gives a concrete constraint.
-        |For small bounded outputs, prefer the obvious standard-library implementation and standard numeric type that fits the requested result.
-        |If an ambiguity materially changes the answer, resource usage, or observable behavior, stop and ask one concise clarification question instead of continuing to reason internally.
-        |After a successful tool result, answer with the result and only the minimal explanation needed.
-        |
-        |### Available Universes:
-        |
-        |The `universe` argument selects the execution context for the code.
-        |Default to `basic` for ordinary computation that only needs the Scala or Java standard library.
-        |Choose `basic` for calculations, string/list/map transformations, JSON-like data shaping with standard collections, date/time arithmetic, sorting, filtering, and similar local reasoning.
-        |Use a skill-specific universe only when the task needs the API described for that universe.
-        |Do not choose a skill-specific universe just because the user mentions a path, filename, URL, or command as plain text; choose it only when you must interact with that external resource.
-        |Each skill expects its own calling convention.
-        |For a composed call, supply universes = ["coding", "github"]. The legacy universe field still selects one skill.
-        |Declared requires dependencies are loaded automatically, with their safe APIs and separate capabilities.
-        |Skills remain atomic; composing them does not permit retaining capabilities in a pure callback.
-        |
-        |### Structured Output (available in every universe):
-        |${builtinSkill.api}
-        |The pure builtins API, puts/putsErr helpers, and formatting conversions are imported.
-        |An OutputStreams capability is supplied as an explicit contextual parameter to your function.
-        |Example: `puts(List(1, 2, 3).sum)`.
-        |Do not use global `println`. Uncaught exceptions are caught and reported by the harness.
-        |Tool results preserve separate stdout and stderr arrays. puts writes stdout; putsErr writes stderr.
-        |Writing stderr alone is not execution failure. An executionError reports an uncaught exception or harness failure.
-        |A successful call with no output confirms execution only; it supplies no computed answer.
-        |
-        |${renderSkills(availableSkills)}
-        |""".stripMargin
-  }
+  val SystemPrompt: String = SkillDiscovery.systemPrompt(availableSkills)
+
+  // The native Apple bridge currently exposes exactly one execution tool.
+  private lazy val NativeSystemPrompt = SystemPrompt
+    .replace(SkillDiscovery.DiscoveryInstructions, "Skill APIs and calling instructions follow.") +
+    "\n\n" + renderSkills(availableSkills)
+
+  def configuredSystemPrompt: String =
+    if sys.env.get("CAPYBARA_PROVIDER").exists(_.trim == "apple-fm") then NativeSystemPrompt else SystemPrompt
+
+  private[agent] def toolDefinitions(native: Boolean = false):
+      (tools: Vector[OllamaClient.ToolDefinition], toolParsers: Map[String, ReadWriter[ToolArguments]]) =
+    val execution = OllamaClient.toolsDef[ScalaToolCall]("run_scala_code",
+      "Execute a Scala snippet body. Use basic for standard-library computation. " +
+      "For other universes, read their skill instructions first. Call supplied capabilities directly; " +
+      "do not implement their interfaces or create capability instances. " +
+      "Use puts(value) for output; the final expression is discarded. Do not announce tool calls.")
+    val describe = OllamaClient.toolsDef[SkillNames]("describe_skills",
+      "Read short descriptions of named skill universes, without loading APIs. Empty universes lists all descriptions.")
+    val readSkill = OllamaClient.toolsDef[SkillNames]("read_skills",
+      "Read calling instructions and supplied capability names for named universes and their dependencies. " +
+      "Requires at least one universe. This only reads documentation; it does not execute code.")
+    (
+      tools = if native then execution.tools else execution.tools ++ describe.tools ++ readSkill.tools,
+      toolParsers = if native then Map("run_scala_code" -> executionParser)
+        else Map("run_scala_code" -> executionParser, "describe_skills" -> discoveryParser,
+          "read_skills" -> discoveryParser)
+    )
+
+  private[agent] def discoveryResult(name: String, names: SkillNames,
+      available: Seq[Skill] = availableSkills, builtins: Skill = builtinSkill): ScalaToolResult =
+    val result = name match
+      case "describe_skills" => SkillDiscovery.describe(names.universes, available)
+      case "read_skills" => SkillDiscovery.read(names.universes, available, builtins)
+      case other => Result.Err(s"Unknown discovery tool: $other")
+    result match
+      case Result.Ok(text) => ScalaToolResult.Success(Vector(ujson.Str(text)), Vector.empty)
+      case Result.Err(error) => ScalaToolResult.Failure(error)
+
+  private[agent] def runDiscovery(name: String, names: SkillNames, log: Logger): ScalaToolResult =
+    val id = ToolExecutionHistory.nextId()
+    log.toolStarted(id, name, names.universes, writeJs(names).render(indent = 2))
+    log.executionRunning(id)
+    val result = discoveryResult(name, names)
+    def output(channel: ToolOutputChannel, value: ujson.Value): Unit =
+      val text = value match
+        case ujson.Str(text) => text
+        case other => other.render(indent = 2)
+      log.executionOutput(id, channel, text + "\n")
+    result match
+      case ScalaToolResult.Success(stdout, stderr) =>
+        stdout.foreach(output(ToolOutputChannel.Stdout, _))
+        stderr.foreach(output(ToolOutputChannel.Stderr, _))
+        log.executionFinished(id, ToolExecutionState.Succeeded)
+      case ScalaToolResult.Failure(error, stdout, stderr) =>
+        stdout.foreach(output(ToolOutputChannel.Stdout, _))
+        stderr.foreach(output(ToolOutputChannel.Stderr, _))
+        output(ToolOutputChannel.Stderr, error)
+        log.executionFinished(id, ToolExecutionState.Failed)
+      case ScalaToolResult.NoOutput => log.executionFinished(id, ToolExecutionState.Succeeded)
+    result
 
   def singleRequest(
       query: String,
@@ -139,23 +198,11 @@ object ScalaAgent {
   )(using
       ExecutionContext
   ): Future[Result[AgentResponse, String]] = {
-    val tool = OllamaClient.toolsDef[ScalaToolCall](
-      "run_scala_code",
-      """Execute a Scala expression.
-        |For simple standard-library-only requests, call this tool immediately with universe "basic"; do not announce or draft the code in normal assistant text first.
-        |For universe "basic", avoid extended reasoning; choose a direct expression and call the tool.
-        |Do not emit assistant text like "I will execute" before this tool. If execution is the next step, this tool call is the next token-level action.
-        |Use universe "basic" for arithmetic, strings, collections, dates, parsing, or other standard-library-only tasks.
-        |The system does not have access to side-effecting operations such as file I/O, network I/O, shell commands, or user-visible `println`
-        |unless explicitly provided by the requested universe.
-        |Call `puts(value)` explicitly to emit structured output; it is available in every universe.
-        |The final expression is discarded. Without a print call, successful execution produces no output.
-        |Multiple print calls emit multiple values in order. Uncaught exceptions are reported automatically.
-        |""".stripMargin
-    )
+    val native = sys.env.get("CAPYBARA_PROVIDER").exists(_.trim == "apple-fm")
+    val tool = toolDefinitions(native)
     val request =
       try ModelProvider.request(
-        messages = OllamaClient.ChatMessage.system(SystemPrompt) +: history,
+        messages = OllamaClient.ChatMessage.system(configuredSystemPrompt) +: history,
         tools = tool.tools,
         toolParsers = tool.toolParsers,
         contextWindow = contextWindow,
@@ -174,7 +221,7 @@ object ScalaAgent {
           scalaCommands: Map[Int, Promise[ScalaToolResult]]
       )
     ]()
-    val chunker = new ChunkOutput.ChunkReader[Chunk[ScalaToolCall]]() {
+    val chunker = new ChunkOutput.ChunkReader[Chunk[ToolArguments]]() {
       private val startedAtNanos = System.nanoTime()
       private val lastStatusAtNanos = new java.util.concurrent.atomic.AtomicLong(0L)
       private val receivedChunks = new java.util.concurrent.atomic.AtomicInteger(0)
@@ -185,7 +232,7 @@ object ScalaAgent {
           (
               Int,
               Chunk[
-                ScalaToolCall
+                ToolArguments
               ]
           )
         ]()
@@ -238,7 +285,7 @@ object ScalaAgent {
 
       updateStatus("waiting", force = true)
 
-      override def onChunk(chunk: Chunk[ScalaToolCall]): Unit =
+      override def onChunk(chunk: Chunk[ToolArguments]): Unit =
         var chunkId = -1
         chunk match {
           case Chunk.ResponseItems(_) | Chunk.ProviderState(_, _) => ()
@@ -255,7 +302,7 @@ object ScalaAgent {
           case Chunk.Tools(tool_calls) =>
             recordChunk(
               "calling tool",
-              tool_calls.map(call => call.arguments.scala_code.length).sum
+              tool_calls.map(call => writeJs(call.arguments).render().length).sum
             )
             checkThinkingDone()
             if seenTools.compareAndSet(false, true) then log.separator()
@@ -273,24 +320,19 @@ object ScalaAgent {
                 outstandingToolPromises.decrementAndGet()
                 updateStatus("tool promise completed", force = true)
               }
-              val result =
-                Skills.resolve(scalaCode.arguments.requestedUniverses, availableSkills, builtinSkill) match
-                  case Result.Ok(skills) =>
-                    ReplExec
-                      .runCodeHarness(
-                        builtinSkill,
-                        skills,
-                        scalaCode.arguments.scala_code,
-                        callId,
-                        log,
-                        cancellationToken
-                      )
-                  case Result.Err(error) =>
-                    val id = ToolExecutionHistory.nextId()
-                    log.executionStarted(id, scalaCode.arguments.requestedUniverses, scalaCode.arguments.scala_code)
-                    log.executionOutput(id, ToolOutputChannel.Stderr, error + "\n")
-                    log.executionFinished(id, ToolExecutionState.Failed)
-                    Future.successful(ScalaToolResult.Failure(error))
+              val result = scalaCode.arguments match
+                case names: SkillNames =>
+                  Future.successful(runDiscovery(scalaCode.name, names, log))
+                case call: ScalaToolCall =>
+                  Skills.resolve(call.requestedUniverses, availableSkills, builtinSkill) match
+                    case Result.Ok(skills) =>
+                      ReplExec.runCodeHarness(builtinSkill, skills, call.scala_code, callId, log, cancellationToken)
+                    case Result.Err(error) =>
+                      val id = ToolExecutionHistory.nextId()
+                      log.executionStarted(id, call.requestedUniverses, call.scala_code)
+                      log.executionOutput(id, ToolOutputChannel.Stderr, error + "\n")
+                      log.executionFinished(id, ToolExecutionState.Failed)
+                      Future.successful(ScalaToolResult.Failure(error))
               promise.tryCompleteWith(result)
               scalaCode.resultSink.foreach { sink =>
                 result.onComplete {
@@ -368,7 +410,7 @@ object ScalaAgent {
   ): Vector[OllamaClient.ChatMessage] = {
     val thinking = new StringBuilder
     val content = new StringBuilder
-    val toolCalls = Vector.newBuilder[OllamaClient.ToolCall[ScalaToolCall]]
+    val toolCalls = Vector.newBuilder[OllamaClient.ToolCall[ToolArguments]]
     val toolResults = Vector.newBuilder[OllamaClient.ChatMessage]
     var responseItems: Option[Vector[ujson.Value]] = None
     var providerState = Map.empty[String, ujson.Value]

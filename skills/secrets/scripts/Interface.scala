@@ -1,9 +1,9 @@
-package secrets
+package capybara.skills.secrets
 
 import scala.language.experimental.captureChecking
 import scala.caps.SharedCapability
 
-trait SecretsInterface {
+trait SecretAccess {
 
   trait Dict extends SharedCapability {
     def get(key: String): Option[String]

@@ -5,7 +5,7 @@ import capybara.agent.*
 /** Inspired by pi-split-view; top panels, conversation, and a fixed bottom editor. */
 final class SplitViewPlugin extends HarnessPlugin:
   val id = "split-view"
-  val description = "Live thinking, code execution history, and separate stdout/stderr output"
+  val description = "Live thinking, tool-call history, and separate stdout/stderr output"
   private var enabled = true
   private var thinking = true
   private var tools = true
@@ -13,8 +13,8 @@ final class SplitViewPlugin extends HarnessPlugin:
   private var height = 6
 
   override val commands = Seq(
-    PluginCommand("executions", "List retained code executions", (_, _) => PluginAction.ListExecutions),
-    PluginCommand("execution", "Inspect code and output: /execution <id|older|newer|latest>", (args, _) =>
+    PluginCommand("executions", "List retained tool calls", (_, _) => PluginAction.ListExecutions),
+    PluginCommand("execution", "Inspect tool input and output: /execution <id|older|newer|latest>", (args, _) =>
       args.trim.toLowerCase match
         case "older" => PluginAction.InspectExecution(ExecutionSelection.Older)
         case "newer" => PluginAction.InspectExecution(ExecutionSelection.Newer)

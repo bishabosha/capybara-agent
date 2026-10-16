@@ -30,10 +30,10 @@ class PresentationSuite extends munit.FunSuite:
     val ordered = Seq("http-boundary", "context-construction", "context-growth", "agent-loop",
       "skill-build-plan", "interface-compile", "implementation-compile", "cache-classpaths",
       "repl-load", "repl-safe", "repl-entry", "repl-entry-body", "repl-invoke",
-      "dev-ide", "dev-snippet", "coding-api", "atomic-skills", "local-api-artifacts",
+      "dev-ide", "dev-snippet", "editing-api", "atomic-skills", "local-api-artifacts",
       "dependency-factory", "github-api", "composed-call", "github-repl-input",
       "github-repl-load", "github-repl-safe", "github-repl-entry", "github-repl-invoke",
-      "coding-demo-run", "coding-demo-call", "coding-demo-output", "github-demo-run",
+      "editing-demo-run", "editing-demo-call", "editing-demo-output", "github-demo-run",
       "github-demo-issue-edit", "publishing", "github-demo-output", "capture-git-exercise",
       "capture-github-files", "exercise-3", "capstone-exercise")
     assert(ordered.forall(ids.contains))

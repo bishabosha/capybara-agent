@@ -5,14 +5,14 @@
 ## A call can compose several atomic skills
 
 ```json
-{"universes": ["coding", "github"], "scala_code": "..."}
+{"universes": ["editing", "github"], "scala_code": "..."}
 ```
 
 | Selection | Capability parameters |
 | --- | --- |
 | `basic` | `output` |
-| `coding` | `output`, `coding` |
-| `coding` and `github` | `output`, `coding`, `github` |
+| `editing` | `output`, `editing` |
+| `editing` and `github` | `output`, `editing`, `github` |
 
 The resolver loads manifest `requires` contexts once and rejects cycles or duplicate binding names. API dependencies are compiled separately.
 

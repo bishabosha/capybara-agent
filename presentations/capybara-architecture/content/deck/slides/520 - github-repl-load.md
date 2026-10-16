@@ -10,9 +10,9 @@
 import system_impl.builtins
 import builtins.given
 import builtins.{puts, putsErr}
-:jar .agent-runtime/interface/coding/sigs.jar
+:jar .agent-runtime/interface/filesystem/sigs.jar
 :jar .agent-runtime/interface/github/sigs.jar
-:jar .agent-runtime/interface/coding/impl.jar
+:jar .agent-runtime/interface/filesystem/impl.jar
 :jar .agent-runtime/interface/github/impl.jar
 ```
 
@@ -26,4 +26,4 @@ Source: [complete composed transcript](assets/source/github-repl-transcript.html
 
 ## Speaker notes
 
-API jars are loaded in dependency order. API-only dependencies do not cause implementation loading or binding construction. This manifest explicitly requests the coding runtime context.
+API jars are loaded in dependency order. API-only dependencies do not cause implementation loading or binding construction. This manifest explicitly requests the editing runtime context.

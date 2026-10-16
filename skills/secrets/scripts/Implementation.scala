@@ -1,5 +1,5 @@
 //> using file Interface.scala
-package secrets.internal
+package capybara.skills.secrets.internal
 
 import scala.language.experimental.captureChecking
 import scala.caps.assumeSafe
@@ -8,7 +8,7 @@ private object SecretStorage {
   val values = scala.collection.mutable.Map.empty[String, String]
 }
 
-class SecretsInterfaceImpl() extends secrets.SecretsInterface, caps.Pure {
+class SecretAccessImpl() extends capybara.skills.secrets.SecretAccess, caps.Pure {
 
   class DictImpl extends Dict {
     def get(key: String): Option[String] = SecretStorage.values.get(key)
@@ -22,4 +22,4 @@ class SecretsInterfaceImpl() extends secrets.SecretsInterface, caps.Pure {
 }
 
 @caps.rejectSafe
-def impl(): secrets.SecretsInterface = SecretsInterfaceImpl()
+def impl(): capybara.skills.secrets.SecretAccess = SecretAccessImpl()

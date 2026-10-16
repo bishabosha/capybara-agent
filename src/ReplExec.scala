@@ -409,6 +409,9 @@ object ReplExec {
       val available = selected ++ Skills.loadAll(os.pwd / "skills") :+ Skills.Basic
       Skills.resolve(selected.map(_.universe), available, builtins).map { skills =>
         compileLock.synchronized {
+          if skills.exists(skill => skill.universe == "inspect-scala-api" &&
+              skill.bindings.exists(_.value == "capybara.skills.inspectscalaapi.internal.impl()")) &&
+              !sys.env.contains("CAPYBARA_CELLAR_BIN") then CellarEnvironment.prepare(os.pwd)
           ensureCompiled(builtins)
           val compileOrder = Skills.resolve(selected.map(_.universe), available, builtins, includeApis = true) match
             case Result.Ok(value) => value

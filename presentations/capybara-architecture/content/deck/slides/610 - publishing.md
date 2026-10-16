@@ -13,7 +13,7 @@ puts(github.createPullRequest(pushed,
 puts(github.checks(pushed))
 ```
 
-`commit` resolves its public `using TextFiles` parameter to `coding`. It validates selected text, checks the expected head and advances the branch without force.
+`commit` resolves its public `using FileSystem` parameter to `filesystem`. It validates selected text, checks the expected head and advances the branch without force.
 
 {{stack footer}}
 

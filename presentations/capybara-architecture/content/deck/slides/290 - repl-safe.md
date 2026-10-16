@@ -11,7 +11,7 @@
 
 def agentCode_00000000_0000_0000_0000_000000000001(
     using output: builtins.OutputStreams,
-    filesystem: fs.Filesystem
+    filesystem: capybara.skills.filesystem.FileSystem
 ): Unit = {
   puts(filesystem.pwd())
   ()

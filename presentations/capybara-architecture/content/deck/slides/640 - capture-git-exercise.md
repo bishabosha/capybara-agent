@@ -5,14 +5,14 @@
 ## Counterexamples: captured effects fail before an edit
 
 ```scala
-coding.edit("Greeting.scala") { text =>
+editing.edit("Greeting.scala") { text =>
   puts(text) // captures output
   text
 }
 ```
 
 ```scala
-coding.edit("src/word-count.mjs") { text =>
+editing.edit("src/word-count.mjs") { text =>
   github.lookupIssue(1).body // captures GitHub
 }
 ```
@@ -27,4 +27,4 @@ Source: [counterexample snippets](assets/source/capture-examples.html), [regress
 
 ## Speaker notes
 
-Run coding-capture-output.scala with skill-run --skill coding and github-capture-in-edit.scala with --skill github. The files remain unchanged. GitHub and output are valid outside the pure callback.
+Run editing-capture-output.scala with skill-run --skill editing and github-capture-in-edit.scala with --skill github. The files remain unchanged. GitHub and output are valid outside the pure callback.

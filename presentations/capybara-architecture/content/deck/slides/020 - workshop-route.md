@@ -9,9 +9,9 @@
 3. Skill compilation: source staging, JARs, classpaths and compiler settings
 4. Every REPL command for one filesystem tool call
 5. Skill development: `skill-ide`, then `skill-run`
-6. Capture-checking exercises and a runnable GitHub coding workflow
+6. Capture-checking exercises and a runnable GitHub editing workflow
 
-The architecture sections explain existing mechanisms. The exercises use the implemented `coding` skill.
+The architecture sections explain existing mechanisms. The exercises use the implemented `editing` skill.
 
 ## Speaker notes
 

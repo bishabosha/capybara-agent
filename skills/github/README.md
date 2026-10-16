@@ -3,28 +3,28 @@
 The `github` skill implements issue lookup, topic branches, commit/push, draft PRs
 and exact-commit CI status. It uses Scala and the JDK HTTP client directly. It has
 no Python helper, process sandbox, local test runner or duplicate editing API.
-Local editing belongs to `coding`.
+Local editing belongs to `editing`.
 
-Its public interface imports the locally published safe editing API:
+Its public interface imports the locally published safe filesystem API:
 
 ```scala
 //> using repository ivy2local
-//> using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"
+//> using dep "dev.capybara.skills::filesystem-api:0.1.0-SNAPSHOT"
 ```
 
 The directive supplies types for compilation. The manifest separately declares
-`requires = Vector("coding")`, so selecting GitHub also supplies a coding context.
+`requires = Vector("filesystem")`, so selecting GitHub also supplies a filesystem context.
 The public method declares the authority it needs:
 
 ```scala
 def commit(branch: Branch, message: String, paths: Seq[String])
-    (using files: editing.TextFiles): Branch
+    (using files: capybara.skills.filesystem.FileSystem): Branch
 ```
 
-The generated safe method has `coding: editing.TextFiles` as a contextual
+The generated safe method has `filesystem: capybara.skills.filesystem.FileSystem` as a contextual
 parameter, so `github.commit(...)` resolves it at the call site. GitHub's factory
 and object hold no file capability. Issue lookup, branches, PRs and checks need
-only GitHub authority. Without a `TextFiles` context, `commit` fails compilation;
+only GitHub authority. Without a `FileSystem` context, `commit` fails compilation;
 importing its API artifact grants no file access.
 
 ## Configure and run
@@ -68,7 +68,7 @@ or model messages. No method returns a token.
 
 The local clone supplies text; the API publishes only the named files. It does
 not run `git`, hooks, shell commands or tests. Keep real credentials outside the
-coding workspace, because a generic read grant intentionally releases ordinary
+editing workspace, because a generic read grant intentionally releases ordinary
 file contents. The GitHub client additionally rejects the actual token, several
 direct encodings, common token patterns and the synthetic lab canary in outgoing
 files/metadata and issue text. Those checks are not universal string tainting.
@@ -77,7 +77,7 @@ files/metadata and issue text. Those checks are not universal string tainting.
 
 ```json
 {
-  "universes": ["coding", "github"],
+  "universes": ["editing", "github"],
   "scala_code": "..."
 }
 ```
@@ -86,15 +86,15 @@ The legacy `universe` field still supports single-skill calls. For the developer
 CLI, use comma-separated skill directories or names:
 
 ```sh
-./mill run skill-run --skill coding,github \
+./mill run skill-run --skill editing,github \
   --file examples/snippets/github-lab.scala
-./mill run skill-transcript --skill coding,github \
+./mill run skill-transcript --skill editing,github \
   --file examples/snippets/github-lab.scala
 ./mill run skill-ide --skill skills/github
 ```
 
 Publish local safe APIs directly with `./mill run skill-publish --skill github`.
-It publishes coding first, then GitHub, and prints their dependency directives.
+It publishes filesystem first, then GitHub, and prints their dependency directives.
 Implementations remain separate installed skills; no factory runs during publication.
 
 IDE preparation publishes required APIs first. The preview shows all injected
@@ -102,7 +102,7 @@ capabilities; runtime snippet bodies still compile separately in safe mode.
 `skill-transcript` only renders commands and does not execute them.
 
 The example assumes a clone of the word-count starter and issue #1. It creates
-`capybara/issue-1`, edits local source through `coding`, publishes that one file
+`capybara/issue-1`, edits local source through `editing`, publishes that one file
 and opens a draft PR. Choose a fresh topic name for another run. With production
 wiring it performs real remote writes. Automated tests use a local GitHub HTTP
 fixture and synthetic credentials.
@@ -110,7 +110,7 @@ fixture and synthetic credentials.
 ```scala
 puts(github.lookupIssue(1))
 val topic = github.createBranch("capybara/issue-1")
-coding.edit("src/word-count.mjs") { text =>
+editing.edit("src/word-count.mjs") { text =>
   text.replace("return text.split(' ').length;",
     """const clean = text.trim();
   return clean === '' ? 0 : clean.split(/\s+/u).length;""")
@@ -120,19 +120,19 @@ puts(github.createPullRequest(pushed, "Fix whitespace", "Fixes #1"))
 puts(github.checks(pushed))
 ```
 
-For an LLM run, set the same environment and ask the agent to use coding and
+For an LLM run, set the same environment and ask the agent to use editing and
 GitHub together. It can list issues, inspect requirements, edit source, publish a
 topic branch and report the draft PR/CI result. Functional verification can be a
 separate task or skill; it is not embedded in the text or GitHub interfaces.
 
 ## Capability boundary
 
-The generated safe method receives separate `coding`, `github` and `output`
+The generated safe method receives separate `filesystem`, `editing`, `github` and `output`
 parameters. A pure edit callback cannot retain any of them:
 
 ```scala
-coding.edit("README.md")(text => { puts(text); text })
-coding.edit("README.md")(text => github.lookupIssue(1).body)
+editing.edit("README.md")(text => { puts(text); text })
+editing.edit("README.md")(text => github.lookupIssue(1).body)
 ```
 
 Both fail capture checking. Calling GitHub outside that callback is authorized

@@ -1,0 +1,5 @@
+extends: ScalaModule
+scalaVersion: 3.10.0
+mvnDeps:
+  - org.virtuslab::cellar-lib:0.1.0-M13
+  - ch.epfl.scala::tasty-query:1.10.0

@@ -35,11 +35,13 @@ object Skills {
     Skill(
       name = "basic",
       description =
-        "Runs Scala code with only the Scala and Java standard libraries. Use for arithmetic, strings, collections, dates, parsing, and other basic computation that does not need files, network, shell commands, or a skill-specific API.",
+        "Runs Scala safe-mode code using permitted Scala and Java standard-library APIs. Prefer immutable collections. Use for basic computation without files, network, shell commands, or a skill-specific API.",
       universe = "basic",
       interface = "",
       code = "",
       api = """No skill-specific capabilities are supplied.
+        |Safe mode permits only checked or explicitly trusted APIs, not every standard-library API.
+        |Prefer immutable List/Vector and map/foldLeft; do not use mutable ListBuffer/ArrayBuffer.
         |Write a Scala expression or block directly; call `puts(value)` to emit the result.
         |Use little or no internal reasoning for this universe.
         |Keep code short and direct for simple tasks; avoid helper methods unless they materially clarify the computation.
@@ -135,22 +137,33 @@ object Skills {
     if isDir(dir) then list(dir).filter(p => exists(p) && isDir(p)).flatMap(loadFrom)
     else Nil
 
-  def renderPrompt(sep: String, skills: Seq[Skill]): String = {
+  def renderPrompt(sep: String, skills: Seq[Skill], includeInterfaces: Boolean = true): String = {
     skills
       .map { skill =>
         if skill.requiresRuntimeClasspath then
+          val reference = if includeInterfaces then
+            s"""Public API reference (already compiled; read these declarations, do not copy them into scala_code):
+               |```scala
+               |${skill.interface}
+               |```""".stripMargin
+          else
+            s"""Inspect method signatures with the inspect-scala-api skill before calling an unfamiliar API.
+               |Select universes = ["inspect-scala-api", "${skill.universe}"] and call
+               |puts(inspectScalaApi.get("${skill.universe}", "${skill.bindings.headOption.map(_.tpe).getOrElse("<fully-qualified type>")}")).
+               |The inspector also provides list(skill, packageOrType) and search(skill, query).""".stripMargin
           s"""#### ${skill.universe}
           |${skill.description}
-          |```scala
-          |${skill.interface}
-          |```
-          |Calling convention:
+          |
+          |Use run_scala_code with universe = "${skill.universe}" and write only the snippet body.
+          |The harness supplies these existing capability values; call methods on them directly:
+          |${skill.bindings.map(b => s"- `${b.name}: ${b.tpe}`").mkString("\n")}
+          |Do not implement the public interfaces, instantiate capabilities, or write a using wrapper.
+          |
+          |Calling instructions:
           |${skill.api}
-          |Required skills (loaded automatically): ${skill.requires.mkString(", ")}
-          |The harness supplies these named contextual parameters to your function (do not create them yourself):
-          |```scala
-          |${skill.bindings.map(b => s"${b.name}: ${b.tpe}").mkString("(using ", ", ", ")")}
-          |```
+          |Required skills (loaded automatically): ${if skill.requires.isEmpty then "none" else skill.requires.mkString(", ")}
+          |
+          |$reference
           |""".stripMargin
         else
           s"""#### ${skill.universe}

@@ -22,6 +22,7 @@ final class InteractiveSession(
   private var thinking = ThinkingInference.ThinkingMode.Auto
   private var closed = false
   private var completedTurns = 0
+  private var currentTurn = Option.empty[SessionTurn]
   private def context = PluginContext(workspace, history)
 
   @volatile private var completionCommands =
@@ -56,6 +57,7 @@ final class InteractiveSession(
     val previous = active
     active = None
     previous.foreach(_.cancel())
+    if previous.nonEmpty then currentTurn = currentTurn.map(_.copy(state = "cancelled"))
     val interrupted = if previous.nonEmpty then interruptExecution() else false
     if previous.nonEmpty then emit(PluginEvent.TurnCancelled)
     previous.nonEmpty || interrupted
@@ -77,6 +79,17 @@ final class InteractiveSession(
           ready()
         case "/usage" => logger.print(usage())
         case "/sys-prompt" => logger.print(systemPrompt() + "\n")
+        case "/export" =>
+          try
+            val json = SessionExport.snapshot(history, systemPrompt(), workspace, thinking.displayName,
+              completedTurns, currentTurn, logger.executionSnapshot).render(indent = 2)
+            parts.lift(1).map(_.trim).filter(_.nonEmpty) match
+              case None => logger.print(json + "\n")
+              case Some(file) =>
+                val path = os.Path(file, workspace)
+                os.write(path, json + "\n")
+                logger.print(s"[session exported to $path]\n")
+          catch case NonFatal(error) => logger.print(s"[export failed] ${error.getMessage}\n")
         case "/think" =>
           parts.lift(1) match
             case None => logger.print(s"thinking mode: ${thinking.displayName}\n")
@@ -90,11 +103,13 @@ final class InteractiveSession(
         case "/help" =>
           logger.print("/x interrupt · /clear reset conversation · /usage token stats · /sys-prompt system prompt\n" +
             "/think on|off|auto · /plugins list · /reload reload plugins · :q quit\n" + plugins.help + "\n")
+          logger.print("/export [path] session JSON (prints without a path; saves to a new file with a path)\n")
         case "/plugins" => logger.print(plugins.describe + "\n")
         case "/clear" =>
           val _ = cancel()
           history = Vector.empty
           completedTurns = 0
+          currentTurn = None
           logger.clearConversation()
           logger.print("[conversation cleared]\n")
           ready()
@@ -138,6 +153,7 @@ final class InteractiveSession(
         val _ = cancel()
         val token = CancellationToken()
         active = Some(token)
+        currentTurn = Some(SessionTurn(transformed, "running"))
         updateUiContext()
         val think = ThinkingInference.shouldThink(transformed, thinking)
         logger.setStatus(Some(s"[thinking ${if think then "enabled" else "disabled"}, mode=${thinking.displayName}]"))
@@ -155,9 +171,13 @@ final class InteractiveSession(
               case Result.Ok(updated) =>
                 history = updated
                 completedTurns += 1
+                currentTurn = currentTurn.map(_.copy(state = "completed"))
                 emit(PluginEvent.TurnCompleted)
-              case Result.Err("cancelled") => emit(PluginEvent.TurnCancelled)
+              case Result.Err("cancelled") =>
+                currentTurn = currentTurn.map(_.copy(state = "cancelled"))
+                emit(PluginEvent.TurnCancelled)
               case Result.Err(error) =>
+                currentTurn = currentTurn.map(_.copy(state = "failed", error = Some(error)))
                 logger.styled(UiRole.Error, s"[error] $error\n")
                 emit(PluginEvent.TurnFailed(error))
             ready()

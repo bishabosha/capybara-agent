@@ -7,10 +7,10 @@
 ```scala
 val Manifest = (
   universe = "filesystem",
-  api = "The harness supplies filesystem: fs.Filesystem as a capability parameter.",
+  api = "The harness supplies filesystem: capybara.skills.filesystem.FileSystem as a capability parameter.",
   predef = "",
-  bindings = Vector((name = "filesystem", tpe = "fs.Filesystem",
-    value = "fs.internal.impl()"))
+  bindings = Vector((name = "filesystem", tpe = "capybara.skills.filesystem.FileSystem",
+    value = "capybara.skills.filesystem.internal.impl()"))
 )
 ```
 

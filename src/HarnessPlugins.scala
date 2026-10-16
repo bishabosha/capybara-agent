@@ -83,7 +83,7 @@ final class HarnessPlugins private (
     catch case NonFatal(error) => Left(s"plugin $owner: ${error.getMessage}")
 
 object HarnessPlugins:
-  val Reserved: Set[String] = Set("x", "usage", "sys-prompt", "think", "help", "plugins", "reload", "clear")
+  val Reserved: Set[String] = Set("x", "usage", "sys-prompt", "think", "help", "plugins", "reload", "clear", "export")
 
   def apply(plugins: Vector[HarnessPlugin]): HarnessPlugins = new HarnessPlugins(plugins, Vector.empty)
 

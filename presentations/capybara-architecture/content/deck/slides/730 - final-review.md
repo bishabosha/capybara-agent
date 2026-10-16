@@ -7,7 +7,7 @@
 | Boundary | Executed evidence |
 | --- | --- |
 | Multiple atomic skills share one safe call | Coding edit followed by GitHub commit/PR |
-| A dependency uses another skill's safe API | Local coding-api publication and public using TextFiles |
+| A dependency uses another skill's safe API | Local editing-api publication and public using FileSystem |
 | Pure callbacks retain no extra capabilities | Rejected output and cross-skill callbacks |
 | Credentials stay behind GitHub's interface | No getter, direct-access rejections, release checks |
 | Editing is language-independent | Scala, Markdown, JSON and new text files |

@@ -5,7 +5,7 @@
 ## Step 1: generate the skill IDE workspace
 
 ```sh
-./mill run skill-ide --skill skills/coding
+./mill run skill-ide --skill skills/editing
 ```
 
 `SkillIde.prepare` writes `.agent-runtime/SkillPreview.scala` and runs:

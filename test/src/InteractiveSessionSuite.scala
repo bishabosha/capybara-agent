@@ -60,6 +60,60 @@ class InteractiveSessionSuite extends munit.FunSuite:
     f.shutdown()
   }
 
+  test("export prints JSON with completed messages, tool results and provider state without submitting") {
+    val f = new Fixture
+    f.send("list files")
+    val call = OllamaClient.ToolCall[ScalaAgent.ToolArguments]("describe_skills",
+      ScalaAgent.SkillNames(Seq("filesystem")), Some("discovery-1"))
+    val assistant = OllamaClient.ChatMessage.assistant("", "", Vector(call))
+      .copy(responseItems = Some(Vector(ujson.Obj("type" -> "function_call"))),
+        providerState = Map("test" -> ujson.Obj("native" -> "state")))
+    val history = Vector(OllamaClient.ChatMessage.user("list files"), assistant,
+      OllamaClient.ChatMessage.tool("describe_skills", "result", Some("discovery-1")))
+    f.finish(0, history)
+    f.output.clear()
+    f.send("/export")
+    val json = ujson.read(f.output.toString)
+    assertEquals(json("formatVersion"), ujson.Num(1))
+    assertEquals(json("messages")(0)("content").str, "system prompt")
+    assertEquals(json("messages")(2)("tool_calls")(0)("function")("name").str, "describe_skills")
+    assertEquals(json("messages")(3)("tool_call_id").str, "discovery-1")
+    assertEquals(json("providerMetadata")(0)("messageIndex"), ujson.Num(2))
+    assertEquals(json("providerMetadata")(0)("providerState")("test")("native").str, "state")
+    assertEquals(json("currentTurn")("state").str, "completed")
+    assertEquals(json("completedTurns"), ujson.Num(1))
+    assertEquals(f.requests.size, 1)
+    assert(f.session.commandNames.contains("/export"))
+    f.shutdown()
+  }
+
+  test("export saves to a new file, preserves existing files and records failed or active turns") {
+    val root = os.temp.dir(prefix = "capybara-export-test-")
+    val f = new Fixture
+    try
+      val file = root / "session with spaces.json"
+      f.send("running")
+      f.send(s"/export $file")
+      assertEquals(ujson.read(os.read(file))("currentTurn")("state").str, "running")
+      assert(!f.requests.head._3.isCancelled)
+      f.send(s"/export $file")
+      assert(f.output.toString.contains("export failed"))
+      assertEquals(ujson.read(os.read(file))("currentTurn")("state").str, "running")
+      val _ = f.pending.head.success(Result.Err("provider failed"))
+      f.output.clear()
+      f.send("/export")
+      assertEquals(ujson.read(f.output.toString)("currentTurn")("error").str, "provider failed")
+      f.send("/clear")
+      f.output.clear()
+      f.send("/export")
+      val cleared = ujson.read(f.output.toString)
+      assertEquals(cleared("messages").arr.size, 1)
+      assertEquals(cleared("currentTurn"), ujson.Null)
+    finally
+      f.shutdown()
+      os.remove.all(root)
+  }
+
   test("plugin workflows transform prompts and completed history feeds the next turn") {
     val f = new Fixture
     f.send("/plan add plugins")

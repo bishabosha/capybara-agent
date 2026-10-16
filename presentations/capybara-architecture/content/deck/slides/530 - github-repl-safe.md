@@ -9,7 +9,7 @@
 
 def agentCode_00000000_0000_0000_0000_000000000001(
     using output: builtins.OutputStreams,
-    coding: editing.TextFiles, github: githubskill.GitHub
+    filesystem: capybara.skills.filesystem.FileSystem, github: capybara.skills.github.GitHub
 ): Unit = {
   val topic = github.branch("capybara/issue-1")
   val pushed = github.commit(topic, "Fix whitespace",
@@ -19,7 +19,7 @@ def agentCode_00000000_0000_0000_0000_000000000001(
 }
 ```
 
-The compiler resolves `commit`’s `TextFiles` requirement to `coding`. The host clears language features before applying the setting.
+The compiler resolves `commit`’s `FileSystem` requirement to `filesystem`. The host clears language features before applying the setting.
 
 {{stack footer}}
 

@@ -22,7 +22,9 @@ trait Logger:
   def echoInput(line: String): Unit = ()
   def styled(role: UiRole, message: String): Unit = print(terminalUi.paint(role, message))
   def executionStarted(id: Long, universes: Seq[String], code: String): Unit =
-    styled(UiRole.Tool, s"execution #$id [${universes.mkString(",")}]:\n```scala\n$code\n```\n")
+    styled(UiRole.Tool, s"execution #$id · run_scala_code [${universes.mkString(",")}]:\n```scala\n$code\n```\n")
+  def toolStarted(id: Long, name: String, universes: Seq[String], arguments: String): Unit =
+    styled(UiRole.Tool, s"tool #$id · $name [${universes.mkString(",")}]:\n```json\n$arguments\n```\n")
   def executionRunning(id: Long): Unit = ()
   def executionOutput(id: Long, channel: ToolOutputChannel, text: String): Unit =
     val role = if channel == ToolOutputChannel.Stdout then UiRole.ToolOutput else UiRole.ToolError
@@ -30,6 +32,7 @@ trait Logger:
   def executionFinished(id: Long, state: ToolExecutionState): Unit =
     styled(UiRole.Tool, s"execution #$id ${state.toString.toLowerCase}\n")
   def executionList: String = "Execution history is available in the interactive terminal."
+  def executionSnapshot: ExecutionView = ExecutionView(Vector.empty, None, true)
   def selectExecution(selection: ExecutionSelection): Either[String, String] = Left("Execution history is unavailable.")
   def separator(): Unit =
     if terminalUi.separator.nonEmpty then styled(UiRole.Muted, terminalUi.separator + "\n")
@@ -65,13 +68,20 @@ object Logger:
     override def executionStarted(id: Long, universes: Seq[String], code: String): Unit = this.synchronized {
       executions.start(id, universes, code)
       super.executionStarted(id, universes, code)
+      toolPreview(id, "run_scala_code", universes, code)
+    }
+    override def toolStarted(id: Long, name: String, universes: Seq[String], arguments: String): Unit = this.synchronized {
+      executions.start(id, universes, arguments, toolName = name)
+      super.toolStarted(id, name, universes, arguments)
+      toolPreview(id, name, universes, arguments)
+    }
+    private def toolPreview(id: Long, name: String, universes: Seq[String], arguments: String): Unit =
       if hidesRole(UiRole.Tool) then
-        val detail = TerminalUi.stripAnsi(s"tool #$id · run_scala_code [${universes.mkString(",")}] · $code")
+        val detail = TerminalUi.stripAnsi(s"tool #$id · $name [${universes.mkString(",")}] · $arguments")
           .map(c => if Character.isISOControl(c) then ' ' else c).replaceAll("\\s+", " ").trim
         val width = (reader.getTerminal.getWidth - 1).max(1)
         val preview = new AttributedString(detail).columnSubSequence(0, width).toString
         styled(UiRole.Muted, preview + "\n")
-    }
     override def executionRunning(id: Long): Unit = this.synchronized {
       executions.state(id, ToolExecutionState.Running)
       panelsDirty = true
@@ -85,6 +95,7 @@ object Logger:
       super.executionFinished(id, state)
     }
     override def executionList: String = this.synchronized { executions.renderList }
+    override def executionSnapshot: ExecutionView = this.synchronized { executions.snapshot }
     override def selectExecution(selection: ExecutionSelection): Either[String, String] = this.synchronized {
       val result = executions.select(selection)
       panelsDirty = true

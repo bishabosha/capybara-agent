@@ -7,13 +7,13 @@
 ```scala
 // GitHub's public safe interface
 def commit(branch: Branch, message: String, paths: Seq[String])
-    (using files: editing.TextFiles): Branch
+    (using files: capybara.skills.filesystem.FileSystem): Branch
 
 // Manifest.scala: automatically supply the caller's context
-requires = Vector("coding")
+requires = Vector("filesystem")
 ```
 
-`using dep` supplies API types. `requires` supplies a runtime context. The call site passes `TextFiles`; the GitHub factory holds no file capability.
+`using dep` supplies API types. `requires` supplies a runtime context. The call site passes `FileSystem`; the GitHub factory holds no file capability.
 
 {{stack footer}}
 

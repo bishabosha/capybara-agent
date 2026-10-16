@@ -5,13 +5,13 @@
 ## Publish safe APIs under one local organization
 
 ```sh
-./mill run skill-publish --skill coding
+./mill run skill-publish --skill editing
 ./mill run skill-publish --skill github
 ```
 
 ```scala
 //> using repository ivy2local
-//> using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"
+//> using dep "dev.capybara.skills::editing-api:0.1.0-SNAPSHOT"
 ```
 
 The command publishes checked APIs to local Ivy, dependencies first, and prints these directives. Factories are never invoked. Implementations remain separate.

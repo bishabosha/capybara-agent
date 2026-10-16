@@ -21,7 +21,8 @@ final case class ToolExecution(
     universes: Vector[String],
     code: String,
     state: ToolExecutionState = ToolExecutionState.Queued,
-    output: Vector[ToolOutputChunk] = Vector.empty
+    output: Vector[ToolOutputChunk] = Vector.empty,
+    toolName: String = "run_scala_code"
 )
 final case class ExecutionView(records: Vector[ToolExecution], selectedId: Option[Long], following: Boolean):
   def selected: Option[ToolExecution] = selectedId.flatMap(id => records.find(_.id == id)).orElse(records.lastOption)
@@ -32,9 +33,9 @@ final class ToolExecutionHistory(val limit: Int = 100, val textLimit: Int = 3276
   private var records = Vector.empty[ToolExecution]
   private var pinned = Option.empty[Long]
 
-  def start(id: Long, universes: Seq[String], code: String): Unit =
+  def start(id: Long, universes: Seq[String], code: String, toolName: String = "run_scala_code"): Unit =
     val displayed = if code.length > textLimit then code.take(textLimit) + "\n// [code truncated in history]" else code
-    records = (records :+ ToolExecution(id, universes.toVector, displayed)).takeRight(limit)
+    records = (records :+ ToolExecution(id, universes.toVector, displayed, toolName = toolName)).takeRight(limit)
     if pinned.exists(id => !records.exists(_.id == id)) then pinned = None
 
   def state(id: Long, state: ToolExecutionState): Unit =
@@ -59,7 +60,7 @@ final class ToolExecutionHistory(val limit: Int = 100, val textLimit: Int = 3276
   def snapshot: ExecutionView = ExecutionView(records, pinned.orElse(records.lastOption.map(_.id)), pinned.isEmpty)
 
   def select(selection: ExecutionSelection): Either[String, String] =
-    if records.isEmpty then Left("No code executions yet.")
+    if records.isEmpty then Left("No tool calls yet.")
     else
       val index = snapshot.selected.flatMap(selected => records.indexWhere(_.id == selected.id) match
         case -1 => None
@@ -81,10 +82,11 @@ final class ToolExecutionHistory(val limit: Int = 100, val textLimit: Int = 3276
           else Left(s"Execution #$id is not in retained history.")
 
   def renderList: String =
-    if records.isEmpty then "No code executions yet."
+    if records.isEmpty then "No tool calls yet."
     else records.map { record =>
       val preview = record.code.linesIterator.find(_.trim.nonEmpty).getOrElse("").take(90)
-      s"#${record.id} ${record.state.toString.toLowerCase} [${record.universes.mkString(",")}] $preview"
+      val name = if record.toolName == "run_scala_code" then "" else record.toolName + " "
+      s"#${record.id} ${record.state.toString.toLowerCase} [${record.universes.mkString(",")}] $name$preview"
     }.mkString("\n")
 
   def clear(): Unit =

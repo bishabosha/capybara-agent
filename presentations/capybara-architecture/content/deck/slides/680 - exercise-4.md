@@ -4,7 +4,7 @@
 
 ## Exercise 2: find the bypass in the public API
 
-**7 minutes.** Inspect `SecretsInterface` and its implementation.
+**7 minutes.** Inspect `SecretAccess` and its implementation.
 
 1. `accessSecret` demands a pure callback. Find the separate method that still returns raw secret data.
 2. Trace that data to the builtin `puts` helper.

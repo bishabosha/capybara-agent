@@ -14,9 +14,9 @@ private val theme = RevealTheme(page = DeckPage(stylesheets = Seq("assets/worksh
 private def prepareSourceLinks(root: os.Path): Unit =
   val repository = root / os.up / os.up
   val files = Seq(
-    "coding-interface" -> "skills/coding/scripts/Interface.scala",
-    "coding-implementation" -> "skills/coding/scripts/Implementation.scala",
-    "coding-manifest" -> "skills/coding/scripts/Manifest.scala",
+    "editing-interface" -> "skills/editing/scripts/Interface.scala",
+    "editing-implementation" -> "skills/editing/scripts/Implementation.scala",
+    "editing-manifest" -> "skills/editing/scripts/Manifest.scala",
     "github-interface" -> "skills/github/scripts/Interface.scala",
     "github-implementation" -> "skills/github/scripts/Implementation.scala",
     "github-manifest" -> "skills/github/scripts/Manifest.scala",
@@ -35,15 +35,15 @@ private def prepareSourceLinks(root: os.Path): Unit =
     "integration-tests" -> "test/src/WorkshopSuite.scala",
     "skill-transcript" -> "src/SkillTranscript.scala",
     "cli-fixtures" -> "test/src/SkillRunFixture.scala",
-    "coding-snippet" -> "examples/snippets/coding.scala",
-    "coding-demo-runner" -> "src/CodingDemo.scala"
+    "editing-snippet" -> "examples/snippets/editing.scala",
+    "editing-demo-runner" -> "src/EditingDemo.scala"
   ).map { (name, path) => (name, path, os.read(repository / os.RelPath(path))) } ++ Seq(
     ("repl-transcript", "Generated REPL command transcript", os.read(root / "public/assets/repl-transcript.txt")),
-    ("coding-demo", "Recorded ordinary coding skill-run stdout", os.read(root / "public/assets/coding-demo.txt")),
+    ("editing-demo", "Recorded ordinary editing skill-run stdout", os.read(root / "public/assets/editing-demo.txt")),
     ("github-demo", "Recorded ordinary GitHub skill-run stdout (local HTTP fixture)", os.read(root / "public/assets/github-demo.txt")),
     ("github-repl-transcript", "Generated GitHub commit REPL transcript", os.read(root / "public/assets/github-repl-transcript.txt")),
     ("github-demo-transcript", "Generated full GitHub demo REPL transcript", os.read(root / "public/assets/github-demo-transcript.txt")),
-    ("capture-examples", "Rejected capability captures", Seq("coding-capture-output.scala", "github-capture-in-edit.scala", "github-hidden-files.scala")
+    ("capture-examples", "Rejected capability captures", Seq("editing-capture-output.scala", "github-capture-in-edit.scala", "github-hidden-files.scala")
       .map(name => s"// examples/snippets/$name\n" + os.read(repository / "examples/snippets" / name)).mkString("\n"))
   )
   def escape(value: String): String = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

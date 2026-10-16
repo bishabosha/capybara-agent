@@ -8,7 +8,7 @@ agentic loop based on the ideas presented in https://github.com/lampepfl/tacit
 flowchart TD
     User["User"] --> Entry["runAgent: CLI query or interactive Terminal"]
     Entry --> Session["runSession / continueSession<br/>Conversation history and request limit"]
-    Session --> Agent["ScalaAgent.singleRequest<br/>System prompt and run_scala_code tool"]
+    Session --> Agent["ScalaAgent.singleRequest<br/>Stable prompt and discovery/execution tools"]
     Agent --> Provider["ModelProvider<br/>Select via CAPYBARA_PROVIDER"]
 
     subgraph Providers["Streaming model clients"]
@@ -35,7 +35,7 @@ flowchart TD
         Skills["Skills loader<br/>Basic universe and skill-specific universes"]
         Jars[".agent-runtime/<br/>Cached interface and implementation JARs"]
         Files --> Skills
-        Skills -->|"Descriptions and interfaces"| Agent
+        Skills -->|"Names; descriptions and calling instructions on request"| Agent
         Skills -->|"Selected skill and baseline builtins"| Repl
         Repl -->|"Compile skills when needed"| Jars
         Jars -->|"Load JARs and predefs"| Repl
@@ -51,11 +51,55 @@ flowchart TD
 ```
 
 The session loop keeps conversation history across interactive turns and makes up
-to 16 model requests per turn. `ScalaAgent` exposes a single tool,
-`run_scala_code`, whose `universe` selects a single skill, or whose `universes` array selects
-several atomic skills and their safe API dependencies. `ReplExec` loads baseline builtins plus any selected skill's JARs
+to 16 model requests per turn. `ScalaAgent` exposes `run_scala_code`,
+`describe_skills`, and `read_skills`. Execution's `universe` selects a single skill,
+or its `universes` array selects several atomic skills and their safe API dependencies. `ReplExec` loads baseline builtins plus any selected skill's JARs
 and predefs in dependency order, then resets the REPL after each execution. Tool results return
 to the model as conversation messages; streamed output goes to the logger.
+
+## Progressive skill discovery
+
+The initial prompt lists skill names and the basic snippet convention. Use
+`describe_skills({"universes":[]})` to browse descriptions, then
+`read_skills({"universes":["editing"]})` for calling instructions and supplied
+capability names. Required skills' instructions are included automatically.
+Full interfaces and implementation factories are omitted from these results.
+Skill declarations describe existing APIs: the model writes only a snippet body
+such as `puts(filesystem.read("README.md"))`.
+
+The `inspect-scala-api` skill replaces full-interface disclosure with targeted API queries.
+After reading its instructions, select both inspect-scala-api and the target skill:
+
+```json
+{"universes":["inspect-scala-api","editing"],"scala_code":"puts(inspectScalaApi.get(\"editing\", \"capybara.skills.editing.TextEditor\"))"}
+```
+
+Use `inspectScalaApi.search(skill, query)` to find symbols and
+`inspectScalaApi.list(skill, packageOrType)` to browse a package or type. Execution prepares
+the selected skills' `sigs.jar` files and publishes their public APIs to local Ivy;
+Cellar inspects those API artifacts. It accepts installed skill names, with fixed
+coordinates, bounded results and a timeout. It does not expose shell access or
+implementation JARs.
+
+On first use, the harness uses Coursier (`cs` on PATH) to prepare a cached JVM
+Cellar runtime under `.agent-runtime/cellar`. It pins Cellar M13, TASTy Query
+1.10.0, and the compiler/TASTy inspector to the harness's Scala version. This
+reads the actual published API JARs, including contextual parameters and docs.
+A small [Cellar printer patch](cellarPrinter/README.md) preserves qualified type
+references such as `capybara.skills.github.Issue` and `capybara.skills.editing.TextEditor`, so those names can
+be used directly in follow-up lookups. It also covers nested types and aliases.
+Older Cellar binaries may reject Scala 3.10's TASTy 28.10 as an empty artifact;
+the managed runtime avoids depending on the installed binary. Its telemetry is
+disabled in its own runtime directory, leaving user Cellar settings unchanged.
+`CAPYBARA_CELLAR_BIN` explicitly selects a custom compatible executable instead.
+
+System instructions and tool schemas stay fixed during a conversation. Discovery
+results are appended as tool messages and reused across turns; earlier messages
+are not rewritten as skills are revealed. This preserves the existing request
+prefix for provider caching, though actual cache reuse depends on the server.
+`/clear` removes discovered context along with the rest of the conversation.
+The native Apple Foundation Models bridge retains its single execution tool and
+full API prompt for compatibility.
 
 ## Terminal plugins and workflows
 
@@ -83,6 +127,19 @@ no writes in their prompts; they do not enforce a separate read-only capability
 policy. `/clear` cancels the current turn and clears conversation history;
 `/plugins` lists loaded plugins. Existing `/x`, `/usage`, `/sys-prompt`, and
 `/think on|off|auto` commands remain available.
+
+Every tool call, including `describe_skills` and `read_skills`, appears in the
+default conversation with its name, input, result and completion status. Plugins
+can move the details into panes while keeping a compact call marker visible.
+
+Use `/export` to print the session as JSON, or `/export session.json` to save it
+to a new file relative to the workspace. Absolute paths and paths with spaces
+are supported; existing files are preserved. The versioned snapshot contains
+the system prompt, completed conversation messages (including tool calls and
+results), provider metadata, thinking mode, current turn status and retained
+tool records. A running, failed or cancelled turn's prompt and error are recorded
+separately from completed message history. Retained tool inputs and outputs have
+the same bounds as the terminal history. Exporting does not interrupt a turn.
 
 ### Write a Scala plugin
 
@@ -262,7 +319,8 @@ replies and one compact line per tool call with its ID, tool name, skills, and a
 code preview clipped to the terminal width. `/split-response` toggles tool details in future transcript writes
 while keeping the execution/output panes live. It does not rewrite earlier
 conversation entries. Turning a pane off makes its stream visible in the transcript again.
-The Executions pane shows the selected Scala snippet with
+Discovery calls show their tool name, JSON arguments and documentation result in
+the execution/output panes. The Executions pane shows selected Scala snippets with
 [Scalameta](https://scalameta.org/docs/trees/guide) Scala 3 token highlighting.
 Keywords, strings, numbers, comments, and type-like identifiers have distinct
 colours, preserved through wrapping and scrolling. Plain themes disable colours;
@@ -276,7 +334,8 @@ including during long-running calls. The model still receives the complete
 captured result after execution. Output buffered by a library becomes visible
 when that library writes to the supplied stream.
 
-`/executions` lists retained calls with IDs, state, skills and a code preview.
+`/executions` lists retained calls with IDs, state, skills and an input preview,
+including discovery calls.
 `/execution <id>` or `/execution older` / `/execution newer` switches both panes
 together. Selecting a call pins it while newer calls run; `/execution latest`
 resumes following new executions. History keeps the last 100 calls, with bounded
@@ -397,8 +456,8 @@ Each skill uses four files:
 | `scripts/Interface.scala` | Defines the public types and methods shown to the model and compiled into `sigs.jar`. |
 | `scripts/Implementation.scala` | Implements the API, compiled into `impl.jar`; its source is not included in the model prompt. |
 
-For example, the `filesystem` manifest declares a `filesystem: fs.Filesystem`
-parameter whose trusted value is `fs.internal.impl()`. A snippet can call
+For example, the `filesystem` manifest declares a `filesystem: capybara.skills.filesystem.FileSystem`
+parameter whose trusted value is `capybara.skills.filesystem.internal.impl()`. A snippet can call
 `puts(filesystem.list(filesystem.pwd()))`; it receives both filesystem and output
 capabilities as explicit parameters.
 
@@ -469,7 +528,7 @@ selected skill bindings, generating a function like this for a filesystem snippe
 
 ```scala
 // Compiled in safe mode:
-def snippet(using output: builtins.OutputStreams, filesystem: fs.Filesystem): Unit = {
+def snippet(using output: builtins.OutputStreams, filesystem: capybara.skills.filesystem.FileSystem): Unit = {
   puts(filesystem.list(filesystem.pwd()))
   ()
 }
@@ -478,7 +537,7 @@ def snippet(using output: builtins.OutputStreams, filesystem: fs.Filesystem): Un
 def invoke(__harnessStdout: java.io.PrintStream, __harnessStderr: java.io.PrintStream): Boolean = {
   given __capybara_output: builtins.OutputStreams =
     builtins.outputStreams(__harnessStdout, __harnessStderr)
-  given __capybara_filesystem: fs.Filesystem = fs.internal.impl()
+  given __capybara_filesystem: capybara.skills.filesystem.FileSystem = capybara.skills.filesystem.internal.impl()
   try { snippet(using __capybara_output, __capybara_filesystem); true }
   catch {
     case scala.util.control.NonFatal(error) =>
@@ -502,7 +561,7 @@ callback retains it.
 For a skill-specific capability, the filesystem manifest declares:
 
 ```scala
-bindings = Vector((name = "filesystem", tpe = "fs.Filesystem", value = "fs.internal.impl()"))
+bindings = Vector((name = "filesystem", tpe = "capybara.skills.filesystem.FileSystem", value = "capybara.skills.filesystem.internal.impl()"))
 ```
 
 Keep skill `name` and `universe` equal. Parameter names must be valid Scala
@@ -563,11 +622,20 @@ Runtime failures add `executionError` while retaining both output arrays.
 Silent success has empty stdout and stderr arrays and displays no result. The
 system prompt explains the separate channels and supplied output capability.
 
-## Generic coding tools and demo
+## Filesystem and text editing
 
-The `coding` skill supplies workspace-relative `list`, `read`, `write`, `replace`
-and `edit` operations for UTF-8 text files. Its interface and the safe harness
-control effects; `edit(path)(String -> String)` rejects callbacks that retain
+Skill names, capability names and packages align: `filesystem` supplies
+`capybara.skills.filesystem.FileSystem`, `editing` supplies
+`capybara.skills.editing.TextEditor`, `github` supplies `capybara.skills.github.GitHub`,
+and `inspect-scala-api` supplies `inspectScalaApi: capybara.skills.inspectscalaapi.ScalaApiInspector`. The former `coding` skill
+is now `editing`; update skill selections, imports and local API coordinates.
+Use `CAPYBARA_WORKSPACE_ROOT` for workspace selection (`CAPYBARA_CODING_ROOT` remains
+a legacy fallback). Both `editing` and `github` require `filesystem`; neither
+requires the other. Selecting `editing` automatically supplies both capabilities.
+
+The `filesystem` skill supplies workspace-relative `list`, `read` and `write`
+operations for UTF-8 text files. The `editing` skill depends on it and adds
+`replace` and `edit`. Its interface and the safe harness control effects; `edit(path)(String -> String)` rejects callbacks that retain
 output or another capability. It has no project-specific filenames, external
 runtime, test runner or process sandbox.
 
@@ -582,13 +650,13 @@ Run these steps in the same Bash or Zsh terminal.
 **2. Load the workspace settings**
 
 ```sh
-source .agent-runtime/demo-workspaces/coding.env
+source .agent-runtime/demo-workspaces/editing.env
 ```
 
 **3. Run the snippet**
 
 ```sh
-./mill run skill-run --skill coding --file examples/snippets/coding.scala
+./mill run skill-run --skill editing --file examples/snippets/editing.scala
 ```
 
 `workshop-setup` copies both tracked starters into local workspaces, builds the
@@ -598,34 +666,34 @@ For a fresh session, use `--directory .agent-runtime/another-workshop` and sourc
 the environment file printed by setup.
 
 The ordinary snippet lists files, edits Scala source and creates a text file.
-Run `examples/snippets/coding-capture-output.scala` separately to see a
+Run `examples/snippets/editing-capture-output.scala` separately to see a
 capture-checking rejection. No model or credentials are required.
 
-For your own project, set `CAPYBARA_CODING_ROOT` before starting the agent or
+For your own project, set `CAPYBARA_WORKSPACE_ROOT` before starting the agent or
 running a snippet:
 
 ```sh
-export CAPYBARA_CODING_ROOT=/absolute/path/to/project
-./mill run skill-ide --skill skills/coding
-./mill run skill-run --skill skills/coding --file /path/to/snippet.scala
+export CAPYBARA_WORKSPACE_ROOT=/absolute/path/to/project
+./mill run skill-ide --skill skills/editing
+./mill run skill-run --skill skills/editing --file /path/to/snippet.scala
 ```
 
 The default workspace is the current directory. See
-[the coding skill guide](skills/coding/README.md) and
+[the editing skill guide](skills/editing/README.md) and
 [the capture-checking workshop](presentations/capybara-architecture/workshop/README.md).
-The generic editor returns ordinary printable file contents; it does not
+The filesystem returns ordinary printable file contents; it does not
 classify them as secrets. Credential-bearing operations belong in separate
 trusted capabilities, such as the GitHub skill below.
 
 To inspect generated commands without executing a snippet:
 
 ```sh
-./mill run skill-transcript --skill skills/coding --file /path/to/snippet.scala
+./mill run skill-transcript --skill skills/editing --file /path/to/snippet.scala
 ```
 
 ## Composing atomic skills
 
-A tool call can select several skills using `universes: ["coding", "github"]`.
+A tool call can select several skills using `universes: ["editing", "github"]`.
 The legacy `universe` field still works for single-skill calls. The harness
 resolves dependencies, rejects cycles and binding conflicts, compiles safe APIs
 in dependency order, loads each skill once, and injects separate contextual
@@ -635,13 +703,13 @@ Skills import each other's locally published interfaces with Scala CLI directive
 
 ```scala
 //> using repository ivy2local
-//> using dep "dev.capybara.skills::coding-api:0.1.0-SNAPSHOT"
+//> using dep "dev.capybara.skills::editing-api:0.1.0-SNAPSHOT"
 ```
 
 Publish explicitly with a name or directory (dependencies are published first):
 
 ```sh
-./mill run skill-publish --skill coding
+./mill run skill-publish --skill editing
 ./mill run skill-publish --skill skills/github
 ```
 
@@ -654,14 +722,14 @@ Only checked interface artifacts are published under `dev.capybara.skills`.
 Implementation factories remain separate, marked `rejectSafe`, and are called
 by trusted harness wiring. An API dependency does not contain credentials or
 implementation classes. Source directives determine the API compilation graph.
-The separate manifest field `requires = Vector("coding")` determines which
+The separate manifest field `requires = Vector("filesystem")` determines which
 runtime contexts are supplied automatically. GitHub's public `commit` method
-declares `(using files: editing.TextFiles)`; the caller supplies file authority.
+declares `(using files: capybara.skills.filesystem.FileSystem)`; the caller supplies file authority.
 The GitHub factory does not capture that authority.
 
 ```sh
-./mill run skill-run --skill coding,github --file /path/to/workflow.scala
-./mill run skill-transcript --skill coding,github --file /path/to/workflow.scala
+./mill run skill-run --skill editing,github --file /path/to/workflow.scala
+./mill run skill-transcript --skill editing,github --file /path/to/workflow.scala
 ```
 
 `SkillCompositionSuite` validates actual local publication, typed delegation,
@@ -670,15 +738,15 @@ dependency ordering and cross-skill capture-checking failures through MCP.
 ## GitHub issue-to-PR workflow
 
 `github` supplies issue, branch, commit/push, draft PR and CI operations.
-It delegates file reads to `coding` through its safe API. Editing remains in
-`coding`; neither interface launches processes or a sandbox. Both implementations
+It delegates file reads to `filesystem` through its safe API. Editing remains in
+`editing`; neither interface launches processes or a sandbox. Both implementations
 are Scala-native, with no Python or Node dependency.
 
-Configure `CAPYBARA_CODING_ROOT`, `CAPYBARA_GITHUB_REPOSITORY`, and the host-only
+Configure `CAPYBARA_WORKSPACE_ROOT`, `CAPYBARA_GITHUB_REPOSITORY`, and the host-only
 `CAPYBARA_GITHUB_TOKEN`, then follow [the GitHub guide](skills/github/README.md):
 
 ```sh
-./mill run skill-run --skill coding,github --file examples/snippets/github-lab.scala
+./mill run skill-run --skill editing,github --file examples/snippets/github-lab.scala
 ```
 
 The example expects a local word-count starter clone and issue #1. It performs

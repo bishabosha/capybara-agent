@@ -15,7 +15,7 @@
 
 {{stack footer}}
 
-Source: [editing interface](assets/source/coding-interface.html), [implementation](assets/source/coding-implementation.html), [integration tests](assets/source/integration-tests.html)
+Source: [editing interface](assets/source/editing-interface.html), [implementation](assets/source/editing-implementation.html), [integration tests](assets/source/integration-tests.html)
 
 {{end-stack}}
 

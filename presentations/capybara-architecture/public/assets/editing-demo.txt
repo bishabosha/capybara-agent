@@ -1,4 +1,4 @@
 {"special.success": ["Greeting.scala", "README.md"]}
 {"special.success": "val greeting = \"hello, world\"\n"}
 {"special.success": "val greeting = \"hello, capybara\"\n"}
-{"special.success": "Edited through the coding capability.\n"}
+{"special.success": "Edited through the editing capability.\n"}

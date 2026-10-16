@@ -10,7 +10,7 @@
 | Implementation compilation | Its own `sigs.jar` and required safe APIs |
 | Execution REPL | Builtins, dependency APIs and granted skills' implementation JARs |
 
-The GitHub public API imports the editing API. Its commit method requires the caller’s `TextFiles` context. It has no separate filesystem implementation or process runner.
+The GitHub public API imports the editing API. Its commit method requires the caller’s `FileSystem` context. It has no separate filesystem implementation or process runner.
 
 {{stack footer}}
 

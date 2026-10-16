@@ -11,7 +11,7 @@
 | How does a manifest become executable code? | [SkillScaffold](assets/source/skill-scaffold.html) |
 | Where does safe mode switch on and off? | [ReplExec.runExpression](assets/source/repl-exec.html) |
 | Which rejection examples have tests? | [ReplExecSuite](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/test/src/ReplExecSuite.scala#L134-L157) |
-| Where does raw secret data escape? | [SecretsInterface.Dict](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/skills/secrets/scripts/Interface.scala#L8-L22) |
+| Where does raw secret data escape? | [SecretAccess.Dict](https://github.com/bishabosha/capybara-agent/blob/e97130cfd70d9f2a87ef933035e2fd09c7a46b2f/skills/secrets/scripts/Interface.scala#L8-L22) |
 
 Links pin repository snapshot `e97130c`, inspected 15 October 2026.
 

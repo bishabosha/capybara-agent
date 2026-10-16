@@ -44,7 +44,7 @@ class TerminalUiSuite extends munit.FunSuite:
   test("split band renders two panes at wide widths and stacks both at narrow widths") {
     val buffers = TerminalPanels()
     buffers.append(UiRole.Thinking, "Considering cancellation\n")
-    buffers.append(UiRole.Tool, "run_scala_code[coding]\n")
+    buffers.append(UiRole.Tool, "run_scala_code[editing]\n")
     buffers.append(UiRole.ToolOutput, "done\n")
     val wide = buffers.render(split, 100, 30)
     assert(wide.head.contains("Thinking") && wide.head.contains("Tools"))

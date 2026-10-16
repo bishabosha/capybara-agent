@@ -8,7 +8,7 @@
 | --- | --- |
 | `builtins.outputStreams(null, null)` | Error contains `rejectSafe` |
 | `val value: Any = 1; value.asInstanceOf[String]` | Compilation returns `Result.Err` |
-| `fs.internal.impl().pwd()` | Error contains `rejectSafe` |
+| `capybara.skills.filesystem.internal.impl().pwd()` | Error contains `rejectSafe` |
 
 The public interface and generated snippet compile with `-language:experimental.safe`. The tests check specific rejected operations, rather than a blanket claim about every JVM API.
 

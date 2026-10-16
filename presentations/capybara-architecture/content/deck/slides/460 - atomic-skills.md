@@ -5,10 +5,10 @@
 ## Compose authority without combining implementations
 
 ```json
-{"universes": ["coding", "github"], "scala_code": "..."}
+{"universes": ["editing", "github"], "scala_code": "..."}
 ```
 
-`coding` handles local text. `github` handles remote GitHub operations. The harness supplies separate capabilities in the same safe method.
+`editing` handles local text. `github` handles remote GitHub operations. The harness supplies separate capabilities in the same safe method.
 
 A public method can require another skill's checked API as a contextual parameter. Its caller supplies that authority.
 

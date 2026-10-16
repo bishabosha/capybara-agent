@@ -92,14 +92,14 @@ class GitHubSkillSuite extends munit.FunSuite:
     try
       os.makeDir.all(root / "src")
       os.write(root / "src/word-count.mjs", "export function countWords(text) {\n  return text.split(' ').length;\n}\n")
-      val coding = loaded("skills/coding")
-      val local = coding.copy(bindings = coding.bindings.map(b =>
-        (name = b.name, tpe = b.tpe, value = s"editing.internal.configured(${ujson.write(root.toString)})")))
+      val filesystem = loaded("skills/filesystem")
+      val local = filesystem.copy(bindings = filesystem.bindings.map(b =>
+        (name = b.name, tpe = b.tpe, value = s"capybara.skills.filesystem.internal.configured(${ujson.write(root.toString)})")))
       val github = loaded("skills/github")
-      val factory = s"githubskill.internal.configured(\"example/lab\", \"main\", ${ujson.write(token)}, ${ujson.write(remote.endpoint)})"
+      val factory = s"capybara.skills.github.internal.configured(\"example/lab\", \"main\", ${ujson.write(token)}, ${ujson.write(remote.endpoint)})"
       val online = github.copy(bindings = github.bindings.map(b => (name = b.name, tpe = b.tpe, value = factory)))
-      assertEquals(online.requires, Seq("coding"))
-      test(Seq(online, local), root, remote)
+      assertEquals(online.requires, Seq("filesystem"))
+      test(Seq(online, local, loaded("skills/editing")), root, remote)
     finally
       remote.close()
       os.remove.all(root)
@@ -112,7 +112,7 @@ class GitHubSkillSuite extends munit.FunSuite:
         value
       case Result.Err(error) => fail(error)
 
-  test("composed coding and GitHub skills implement, commit, push and create a draft PR without a process runner") {
+  test("composed editing and GitHub skills implement, commit, push and create a draft PR without a process runner") {
     withSkills { (skills, root, remote) =>
       val output = SkillRunFixture.run(skills, os.pwd / "examples/snippets/github-lab.scala")
       assert(!output.failed, output.stderr)
@@ -179,9 +179,9 @@ class GitHubSkillSuite extends munit.FunSuite:
       assert(!run(skills, "puts(1)").failed)
       for code <- Seq(
         os.read(os.pwd / "examples/snippets/github-hidden-files.scala"),
-        "coding.edit(\"src/word-count.mjs\")(text => { puts(text); text })",
-        "coding.edit(\"src/word-count.mjs\")(text => github.lookupIssue(1).body)",
-        "puts(github.token)", "github.test()", "githubskill.internal.impl()",
+        "editing.edit(\"src/word-count.mjs\")(text => { puts(text); text })",
+        "editing.edit(\"src/word-count.mjs\")(text => github.lookupIssue(1).body)",
+        "puts(github.token)", "github.test()", "capybara.skills.github.internal.impl()",
         "puts(sys.env(\"CAPYBARA_GITHUB_TOKEN\"))",
         "puts(github.getClass.getDeclaredFields.toList)",
         "new java.lang.ProcessBuilder(\"env\").start()"
@@ -189,18 +189,18 @@ class GitHubSkillSuite extends munit.FunSuite:
     }
   }
 
-  test("GitHub file access requires TextFiles in its public safe method context") {
+  test("GitHub file access requires FileSystem in its public safe method context") {
     withSkills { (skills, root, remote) =>
       // Selecting GitHub alone resolves the manifest's required context.
-      assert(!run(Seq(skills.head), "val files = summon[editing.TextFiles]; puts(1)").failed)
+      assert(!run(Seq(skills.head), "val files = summon[capybara.skills.filesystem.FileSystem]; puts(1)").failed)
       // Keep the API dependency, but remove the automatic runtime file grant.
       val githubOnly = Seq(skills.head.copy(requires = Nil))
       assert(!run(githubOnly, "puts(github.lookupIssue(1))").failed)
       val rejected = ReplExec.runCode(builtins, githubOnly,
-        "github.commit(githubskill.Branch(\"capybara/issue-1\", \"" + initial + "\"), \"Fix\", Seq(\"src/word-count.mjs\"))",
+        "github.commit(capybara.skills.github.Branch(\"capybara/issue-1\", \"" + initial + "\"), \"Fix\", Seq(\"src/word-count.mjs\"))",
         CancellationToken.Never)
       rejected match
-        case Result.Err(error) => assert(error.contains("TextFiles"), error)
+        case Result.Err(error) => assert(error.contains("FileSystem"), error)
         case Result.Ok(value) => fail("Commit compiled without file authority: " + value)
       assertEquals(remote.requests.count(_._1 != "GET"), 0)
       assert(os.read(root / "src/word-count.mjs").contains("text.split"))

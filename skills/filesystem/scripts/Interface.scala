@@ -1,7 +1,11 @@
-package fs
-trait Filesystem extends caps.SharedCapability {
-  type Path
+package capybara.skills.filesystem
 
-  def pwd(): Path
-  def list(path: Path): Seq[Path]
+import scala.language.experimental.captureChecking
+
+/** File authority restricted to one host-selected workspace. Paths are workspace-relative. */
+trait FileSystem extends caps.SharedCapability {
+  def pwd(): String
+  def list(path: String): Seq[String]
+  def read(path: String): String
+  def write(path: String, text: String): Unit
 }

@@ -7,14 +7,14 @@
 ```scala
 def agentCode(
     using output: builtins.OutputStreams,
-    coding: editing.TextFiles,
-    github: githubskill.GitHub
+    editing: capybara.skills.editing.TextEditor,
+    github: capybara.skills.github.GitHub
 ): Unit = {
   // local edits and remote operations can compose here
 }
 ```
 
-A callback typed `String -> String` still cannot retain output, coding or GitHub. Adding skills does not relax its capture set.
+A callback typed `String -> String` still cannot retain output, editing or GitHub. Adding skills does not relax its capture set.
 
 {{stack footer}}
 

@@ -15,7 +15,7 @@ val pushed = github.commit(topic, "Fix whitespace",
 puts(pushed)
 ```
 
-The manifest’s `requires = Vector("coding")` supplies `coding` automatically. The following slides show the complete generated commands for this call.
+The manifest’s `requires = Vector("filesystem")` supplies `filesystem` automatically. The following slides show the complete generated commands for this call.
 
 {{stack footer}}
 

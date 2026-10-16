@@ -6,6 +6,7 @@ mill-build:
     - examples/
 extends: ScalaModule
 scalaVersion: 3.10.0
+moduleDeps: [cellarPrinter]
 repositories: ["https://repo.scala-lang.org/artifactory/maven-nightlies"]
 scalacOptions:
   - -Wunused:imports

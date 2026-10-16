@@ -5,8 +5,8 @@
 ## The shipped demo exposes a direct release path
 
 ```scala
-secretAccess.dict.put("demo", "LAB_ONLY_CANARY_7F3A")
-puts(secretAccess.dict.get("demo"))
+secrets.dict.put("demo", "LAB_ONLY_CANARY_7F3A")
+puts(secrets.dict.get("demo"))
 ```
 
 The API path exposes the stored string to the output channel. The implementation also defines:

@@ -37,7 +37,7 @@ def runAgent(query: Option[String], pluginDir: Option[String] = None) =
             plugins,
             () => HarnessPlugins.load(directory),
             () => usageTracker.render,
-            () => ScalaAgent.SystemPrompt,
+            () => ScalaAgent.configuredSystemPrompt,
             (prompt, history, mode, token, logger) =>
               runSession(prompt, history, usageTracker, contextWindow, keepAlive, mode, token)(using logger)
           )

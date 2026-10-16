@@ -9,14 +9,14 @@ trait GitHub extends caps.SharedCapability {
   def lookupIssue(number: Int): Issue
   def createBranch(name: String): Branch
   def commit(branch: Branch, message: String, paths: Seq[String])
-      (using files: editing.TextFiles): Branch
+      (using files: capybara.skills.filesystem.FileSystem): Branch
   def createPullRequest(branch: Branch,
       title: String, body: String): PullRequest
   def checks(branch: Branch): CheckSummary
 }
 ```
 
-`GitHub` owns remote authority. `commit` also needs the caller’s file authority. The factory does not capture `TextFiles`.
+`GitHub` owns remote authority. `commit` also needs the caller’s file authority. The factory does not capture `FileSystem`.
 
 {{stack footer}}
 

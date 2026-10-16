@@ -13,10 +13,10 @@ def harnessEntry_00000000_0000_0000_0000_000000000001(
 ): Boolean = {
   given __capybara_output: builtins.OutputStreams =
     builtins.outputStreams(__harnessStdout, __harnessStderr)
-  given __capybara_coding: editing.TextFiles =
-    editing.internal.impl()
-  given __capybara_github: githubskill.GitHub =
-    githubskill.internal.impl()
+  given __capybara_filesystem: capybara.skills.filesystem.FileSystem =
+    capybara.skills.filesystem.internal.impl()
+  given __capybara_github: capybara.skills.github.GitHub =
+    capybara.skills.github.internal.impl()
 ```
 
 The host clears language features before selecting capture checking. This method continues on the next slide.
@@ -29,4 +29,4 @@ Source: [complete composed transcript](assets/source/github-repl-transcript.html
 
 ## Speaker notes
 
-The GitHub constructor receives no TextFiles. The checked method receives independent capability arguments. These are actual factory expressions from the manifests.
+The GitHub constructor receives no FileSystem. The checked method receives independent capability arguments. These are actual factory expressions from the manifests.

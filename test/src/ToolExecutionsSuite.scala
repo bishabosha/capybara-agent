@@ -1,6 +1,48 @@
 package capybara.agent
 
 class ToolExecutionsSuite extends munit.FunSuite:
+  test("discovery calls appear in the default conversation and split-view execution history") {
+    val split = TerminalUi(colorEnabled = false, panels = Vector(
+      UiPanel("executions", "Executions", Set(UiRole.Tool), content = UiPanelContent.ExecutionCode),
+      UiPanel("output", "Output", Set(UiRole.ToolOutput, UiRole.ToolError), content = UiPanelContent.ExecutionOutput)),
+      hiddenRoles = Set(UiRole.Tool, UiRole.ToolOutput, UiRole.ToolError))
+    for ui <- Seq(TerminalUi(colorEnabled = false), split) do
+      val bytes = new java.io.ByteArrayOutputStream()
+      val terminal = new org.jline.terminal.impl.DumbTerminal("discovery-ui", "xterm",
+        new java.io.ByteArrayInputStream(Array.emptyByteArray), bytes, java.nio.charset.StandardCharsets.UTF_8)
+      terminal.setSize(new org.jline.terminal.Size(180, 32))
+      val logger = new Logger.TerminalLogger(new TerminalLineReader(terminal), terminal.writer(), "> ")
+      try
+        logger.setUi(ui)
+        val names = ScalaAgent.SkillNames(Seq("filesystem"))
+        assertEquals(ScalaAgent.runDiscovery("describe_skills", names, logger),
+          ScalaAgent.discoveryResult("describe_skills", names))
+        logger.flush()
+        assert(bytes.toString(java.nio.charset.StandardCharsets.UTF_8).contains("describe_skills"))
+        val success = logger.executionSnapshot.selected.get
+        assertEquals(success.toolName, "describe_skills")
+        assertEquals(success.state, ToolExecutionState.Succeeded)
+        assertEquals(ujson.read(success.code)("universes")(0).str, "filesystem")
+        assert(success.output.exists(chunk => chunk.channel == ToolOutputChannel.Stdout && chunk.text.contains("filesystem:")))
+        assert(logger.executionList.contains("describe_skills"))
+        if ui.panels.nonEmpty then
+          val panes = TerminalPanels().render(ui, 180, 32, executions = logger.executionSnapshot).mkString("\n")
+          assert(panes.contains("describe_skills"))
+          assert(panes.contains("universes"))
+          assert(panes.contains("filesystem:"))
+        val _ = ScalaAgent.runDiscovery("read_skills", ScalaAgent.SkillNames(Seq("missing")), logger)
+        val failed = logger.executionSnapshot.selected.get
+        assertEquals(failed.toolName, "read_skills")
+        assertEquals(failed.state, ToolExecutionState.Failed)
+        assert(failed.output.exists(chunk => chunk.channel == ToolOutputChannel.Stderr && chunk.text.contains("Universe not found")))
+        val json = SessionExport.snapshot(Vector.empty, "system", os.pwd, "auto", 0, None, logger.executionSnapshot)
+        assertEquals(json("retainedToolCalls")(0)("name").str, "describe_skills")
+        assertEquals(json("retainedToolCalls")(1)("state").str, "failed")
+      finally
+        logger.close()
+        terminal.close()
+  }
+
   test("selection keeps code, stream channels and state from the same execution") {
     val history = ToolExecutionHistory()
     history.start(1, Seq("basic"), "puts(1)")

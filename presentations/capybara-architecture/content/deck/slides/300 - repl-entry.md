@@ -15,7 +15,7 @@ def harnessEntry_00000000_0000_0000_0000_000000000001(
 ): Boolean = {
   given __capybara_output: builtins.OutputStreams =
     builtins.outputStreams(__harnessStdout, __harnessStderr)
-  given __capybara_filesystem: fs.Filesystem = fs.internal.impl()
+  given __capybara_filesystem: capybara.skills.filesystem.FileSystem = capybara.skills.filesystem.internal.impl()
 ```
 
 The host clears language features, then selects capture checking. Trusted factories supply the two capability arguments. **The same method continues on the next slide.**

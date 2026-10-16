@@ -7,12 +7,12 @@
 ```scala
 puts(github.lookupIssue(1))
 val topic = github.createBranch("capybara/issue-1")
-coding.edit("src/word-count.mjs") { source =>
+editing.edit("src/word-count.mjs") { source =>
   source.replace("return text.split(' ').length;",
     """const clean = text.trim();
   return clean === '' ? 0 : clean.split(/\s+/u).length;""")
 }
-puts(coding.read("src/word-count.mjs"))
+puts(filesystem.read("src/word-count.mjs"))
 ```
 
 This is the first half of `examples/snippets/github-lab.scala`. Its callback uses only the supplied source text.

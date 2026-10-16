@@ -8,16 +8,16 @@
 | --- | --- |
 | Pure edit callback calls `puts` | Compiler rejection |
 | Pure edit callback calls `github` | Compiler rejection |
-| `editing.internal.impl()` | `rejectSafe` rejection |
-| `coding.read("../credentials")` | Implementation returns `PATH_DENIED` |
-| `coding.write("notes.txt", "hello")` | Allowed file effect |
-| `puts(coding.read("example.txt"))` | Allowed release of ordinary text |
+| `capybara.skills.editing.internal.impl()` | `rejectSafe` rejection |
+| `filesystem.read("../credentials")` | Implementation returns `PATH_DENIED` |
+| `filesystem.write("notes.txt", "hello")` | Allowed file effect |
+| `puts(filesystem.read("example.txt"))` | Allowed release of ordinary text |
 
 **Pass condition:** distinguish unavailable authority, retained authority and deliberately released data.
 
 {{stack footer}}
 
-Source: [editing interface](assets/source/coding-interface.html), [implementation](assets/source/coding-implementation.html), [integration tests](assets/source/integration-tests.html)
+Source: [editing interface](assets/source/editing-interface.html), [implementation](assets/source/editing-implementation.html), [integration tests](assets/source/integration-tests.html)
 
 {{end-stack}}
 

@@ -22,6 +22,6 @@ package object agent:
         mainargs.ParserForMethods(SkillTranscript).runOrExit(args.tail)
       else if args.headOption.contains("workshop-setup") then
         mainargs.ParserForMethods(WorkshopSetup).runOrExit(args.tail)
-      else if args.headOption.contains("coding-demo") then
-        mainargs.ParserForMethods(CodingDemo).runOrExit(args.tail)
+      else if args.headOption.contains("editing-demo") then
+        mainargs.ParserForMethods(EditingDemo).runOrExit(args.tail)
       else mainargs.ParserForMethods(capybara.agent).runOrExit(args)

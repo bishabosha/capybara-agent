@@ -182,6 +182,35 @@ class ReplExecSuite extends munit.FunSuite:
     assert(!ScalaAgent.SystemPrompt.contains("Return the desired answer as the final expression"))
   }
 
+  test("safe-mode guidance matches mutable collection restrictions and permits local loop variables") {
+    for collection <- Seq("ListBuffer", "ArrayBuffer") do
+      ReplExec.runCode(builtins, Skills.Basic, s"scala.collection.mutable.$collection[Int]()") match
+        case Result.Err(error) =>
+          assert(error.contains(collection))
+          assert(error.contains("neither compiled in safe mode nor tagged with @assumedSafe"))
+        case Result.Ok(output) => fail(s"Expected safe mode to reject $collection: $output")
+
+    val loop = """var values = List(0, 1)
+      |var i = 2
+      |while (i < 15) {
+      |  values = values :+ (values(values.length - 1) + values(values.length - 2))
+      |  i += 1
+      |}
+      |puts(values)
+      |""".stripMargin
+    val fold = """val result = (1 to 15).foldLeft(List.empty[BigInt]) { (acc, _) =>
+      |  if (acc.isEmpty) List(0)
+      |  else if (acc.length == 1) acc :+ 1
+      |  else acc :+ (acc(acc.length - 1) + acc(acc.length - 2))
+      |}
+      |puts(result)
+      |""".stripMargin
+    val expected = ujson.Arr(0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377)
+    for code <- Seq(loop, fold) do
+      assertEquals(ReplExec.decodeOutput(execute(code)),
+        ScalaToolResult.Success(Vector(expected), Vector.empty))
+  }
+
   test("safe code receives output but cannot manufacture another output capability") {
     val result = ReplExec.runCode(builtins, Skills.Basic, "builtins.outputStreams(null, null)")
     result match
@@ -202,7 +231,7 @@ class ReplExecSuite extends munit.FunSuite:
 
   test("the filesystem comes from the manifest parameter, not an accessible global") {
     val filesystem = loaded("skills/filesystem")
-    val result = ReplExec.runCode(builtins, filesystem, "fs.internal.impl().pwd()")
+    val result = ReplExec.runCode(builtins, filesystem, "capybara.skills.filesystem.internal.impl().pwd()")
     result match
       case Result.Err(error) => assert(error.contains("rejectSafe"))
       case Result.Ok(output) => fail(s"Trusted filesystem factory was callable: $output")
@@ -279,7 +308,7 @@ class ReplExecSuite extends munit.FunSuite:
   }
 
   test("skill IDE setup uses original files and requires no Mill project") {
-    for directory <- Seq("skills/filesystem", "skills/secrets", "skills/coding", "skills/github", "builtin-skills/capybara-builtins") do
+    for directory <- Seq("skills/filesystem", "skills/secrets", "skills/editing", "skills/github", "builtin-skills/capybara-builtins") do
       SkillIde.prepare(directory) match
         case Result.Ok(path) =>
           assert(os.list(path / ".bsp").exists(_.ext == "json"))

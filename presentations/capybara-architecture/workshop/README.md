@@ -1,6 +1,6 @@
 # Text editing and capture checking
 
-The `coding` universe is a general text-file capability, independent of language
+The `editing` universe is a general text-file capability, independent of language
 and repository layout. The checked `Interface.scala` and agent harness determine
 which effects are available. The implementation uses JDK file operations
 inside the host JVM; it launches no process or OS sandbox.
@@ -25,36 +25,36 @@ GitHub lab's hidden CI files, and builds the safe skill APIs and implementations
 It needs no model account or GitHub credential. Repeating it preserves edits.
 It prints each actual workspace path and the ordinary commands to run next.
 
-The generated `coding.env` and `github.env` files select the local file root;
+The generated `editing.env` and `github.env` files select the local file root;
 they contain no tokens. Source one to switch demos. To start a fresh session
 without losing work, use `--directory .agent-runtime/another-workshop` and the
 paths printed by that invocation.
 
 ## Coding demo
 
-**2. Load the coding workspace**
+**2. Load the editing workspace**
 
 ```sh
-source .agent-runtime/demo-workspaces/coding.env
+source .agent-runtime/demo-workspaces/editing.env
 ```
 
-**3. Run the coding snippet**
+**3. Run the editing snippet**
 
 ```sh
-./mill run skill-run --skill coding --file examples/snippets/coding.scala
+./mill run skill-run --skill editing --file examples/snippets/editing.scala
 ```
 
 This ordinary CLI command lists files, reads and edits `Greeting.scala`, creates
 `notes.txt` and prints structured results. The demo slides show the full snippet
-and stdout recorded from this same command path. `CodingDemoSuite` configures only
+and stdout recorded from this same command path. `EditingDemoSuite` configures only
 the trusted root factory for its temporary fixture; it changes no public API.
 
 ## Develop and use the skill
 
 ```sh
-export CAPYBARA_CODING_ROOT=/absolute/path/to/project
-./mill run skill-ide --skill skills/coding
-./mill run skill-run --skill skills/coding --file /path/to/snippet.scala
+export CAPYBARA_WORKSPACE_ROOT=/absolute/path/to/project
+./mill run skill-ide --skill skills/editing
+./mill run skill-run --skill skills/editing --file /path/to/snippet.scala
 ```
 
 Open the generated workspace in Metals or IntelliJ, edit the original interface
@@ -65,13 +65,13 @@ parent directory. The generic implementation checks paths, rejects symlinks,
 limits files to 1 MiB and performs expected-content replacement.
 
 ```scala
-puts(coding.list("."))
-val before = coding.read("README.md")
-coding.edit("README.md") { text =>
+puts(filesystem.list("."))
+val before = filesystem.read("README.md")
+editing.edit("README.md") { text =>
   text.replace("Old heading", "New heading")
 }
-coding.write("notes.txt", "Update the examples.\n")
-puts(coding.read("README.md"))
+filesystem.write("notes.txt", "Update the examples.\n")
+puts(filesystem.read("README.md"))
 ```
 
 These are ordinary text operations; the skill does not embed a test framework,
@@ -82,14 +82,14 @@ a language, credential scanner or hardcoded list of project files.
 Run each independently:
 
 ```scala
-coding.edit("README.md") { text =>
+editing.edit("README.md") { text =>
   puts(text)
   text
 }
 ```
 
 ```scala
-coding.edit("README.md")(text => coding.read("other.txt"))
+editing.edit("README.md")(text => filesystem.read("other.txt"))
 ```
 
 Both must fail compilation before the file changes. The first retains output;
@@ -99,8 +99,8 @@ string is accepted. Report with `puts` after the edit, outside the callback.
 ## Exercise: distinguish authority from contents
 
 ```scala
-coding.write("example.txt", "LAB_ONLY_CANARY_EXAMPLE")
-puts(coding.read("example.txt"))
+filesystem.write("example.txt", "LAB_ONLY_CANARY_EXAMPLE")
+puts(filesystem.read("example.txt"))
 ```
 
 This is allowed: the file API intentionally releases ordinary printable text.
@@ -111,8 +111,8 @@ and has no token getter.
 
 ## Exercise: compiler rejection or implementation error
 
-- Capturing `puts` or `coding` in an `edit` callback: compiler rejection.
-- Calling `editing.internal.impl()` from a snippet: `rejectSafe` rejection.
+- Capturing `puts` or `editing` in an `edit` callback: compiler rejection.
+- Calling `capybara.skills.editing.internal.impl()` from a snippet: `rejectSafe` rejection.
 - Direct process, ambient file or environment access: safe-mode rejection in the
   tested cases.
 - Reading `../credentials`: implementation returns `PATH_DENIED`.
@@ -138,10 +138,10 @@ participants use their own generated environment file. Configure the remote
 GitHub repository and host credential separately.
 
 The `github` universe separately supplies issue lookup, branches, commit/push
-and draft PR creation. Text edits belong to `coding`. Its host owns the token and repository selection. Follow `skills/github/README.md` to configure the host environment and
+and draft PR creation. Text edits belong to `editing`. Its host owns the token and repository selection. Follow `skills/github/README.md` to configure the host environment and
 publish the pristine starter under `workshop/project` to your own lab repository.
 Use only synthetic data. The example expects issue #1. Its public commit method
-requires a `TextFiles` context; manifest `requires` supplies coding automatically.
+requires a `FileSystem` context; manifest `requires` supplies filesystem automatically.
 
 **3. Run the GitHub snippet in the same terminal**
 
@@ -151,7 +151,7 @@ requires a `TextFiles` context; manifest `requires` supplies coding automaticall
 ```
 
 This performs real authenticated branch/PR writes for the configured repository.
-Use the same pure coding.edit callback while both skills are selected. Try
+Use the same pure editing.edit callback while both skills are selected. Try
 capturing output and the GitHub capability to observe the compile-time restriction.
 Neither skill runs a process or OS sandbox. Functional checks can run independently.
 Review the final diff and report the exact published commit's CI status.
@@ -159,17 +159,17 @@ Review the final diff and report the exact published commit's CI status.
 Run the checked-in counterexamples separately:
 
 ```sh
-./mill run skill-run --skill coding --file examples/snippets/coding-capture-output.scala
+./mill run skill-run --skill editing --file examples/snippets/editing-capture-output.scala
 ./mill run skill-run --skill github --file examples/snippets/github-capture-in-edit.scala
 ./mill run skill-run --skill github --file examples/snippets/github-hidden-files.scala
 ```
 
-Each must fail compilation. The last one tries to hide a `TextFiles` capture in
+Each must fail compilation. The last one tries to hide a `FileSystem` capture in
 a function typed `GitHub -> Unit`; public contextual requirements expose it.
 
 ## Validation
 
-Run `WorkshopSuite`, `CodingDemoSuite` and `GitHubSkillSuite` through Metals MCP.
+Run `WorkshopSuite`, `EditingDemoSuite` and `GitHubSkillSuite` through Metals MCP.
 The first two validate generic text editing and capture checking. The GitHub
 suite uses a local HTTP fixture; it makes no authenticated live push
 or PR. SkillCompositionSuite verifies local publication of safe API artifacts and

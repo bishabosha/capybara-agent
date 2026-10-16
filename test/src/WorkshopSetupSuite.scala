@@ -8,14 +8,14 @@ class WorkshopSetupSuite extends munit.FunSuite:
     try
       val directory = temporary / "participant's workshop"
       val workspaces = WorkshopSetup.create(os.pwd, directory)
-      assertEquals(workspaces.map(_.name), Seq("coding", "github"))
+      assertEquals(workspaces.map(_.name), Seq("editing", "github"))
       assert(workspaces.forall(_.created))
-      assertEquals(os.read(directory / "coding/Greeting.scala"), os.read(os.pwd / "examples/coding-workspace/Greeting.scala"))
+      assertEquals(os.read(directory / "editing/Greeting.scala"), os.read(os.pwd / "examples/editing-workspace/Greeting.scala"))
       assertEquals(os.read(directory / "github/src/word-count.mjs"),
         os.read(os.pwd / "presentations/capybara-architecture/workshop/project/src/word-count.mjs"))
       assert(os.exists(directory / "github/.github/workflows/ci.yml"))
       for workspace <- workspaces do
-        val command = s". ${WorkshopSetup.shellQuote(workspace.environment.toString)}; printf '%s' \"$$CAPYBARA_CODING_ROOT\""
+        val command = s". ${WorkshopSetup.shellQuote(workspace.environment.toString)}; printf '%s' \"$$CAPYBARA_WORKSPACE_ROOT\""
         val sourced = os.proc("sh", "-c", command).call().out.text()
         assertEquals(sourced, workspace.root.toString)
         assert(!os.read(workspace.environment).contains("TOKEN"))
@@ -26,12 +26,12 @@ class WorkshopSetupSuite extends munit.FunSuite:
     val directory = os.temp.dir(prefix = "capybara-workshop-repeat-")
     try
       val _ = WorkshopSetup.create(os.pwd, directory)
-      os.write.over(directory / "coding/Greeting.scala", "participant edit")
+      os.write.over(directory / "editing/Greeting.scala", "participant edit")
       os.write.over(directory / "github/src/word-count.mjs", "implemented")
       os.write(directory / "github/notes.txt", "keep this")
       val repeated = WorkshopSetup.create(os.pwd, directory)
       assert(repeated.forall(!_.created))
-      assertEquals(os.read(directory / "coding/Greeting.scala"), "participant edit")
+      assertEquals(os.read(directory / "editing/Greeting.scala"), "participant edit")
       assertEquals(os.read(directory / "github/src/word-count.mjs"), "implemented")
       assertEquals(os.read(directory / "github/notes.txt"), "keep this")
     finally os.remove.all(directory)
@@ -42,7 +42,7 @@ class WorkshopSetupSuite extends munit.FunSuite:
     try
       os.write(directory / "github.env", "participant settings")
       val _ = intercept[IllegalArgumentException](WorkshopSetup.create(os.pwd, directory))
-      assert(!os.exists(directory / "coding"))
+      assert(!os.exists(directory / "editing"))
       assert(!os.exists(directory / "github"))
       assertEquals(os.read(directory / "github.env"), "participant settings")
     finally os.remove.all(directory)
@@ -57,9 +57,9 @@ class WorkshopSetupSuite extends munit.FunSuite:
       }
       val text = output.toString(java.nio.charset.StandardCharsets.UTF_8)
       assert(text.contains("Workshop ready"))
-      assert(text.contains("skill-run --skill coding --file examples/snippets/coding.scala"))
-      assert(text.contains("skill-run --skill github --file examples/snippets/github-lab.scala"))
-      assert(os.exists(directory / "coding.env"))
+      assert(text.contains("skill-run --skill editing --file examples/snippets/editing.scala"))
+      assert(text.contains("skill-run --skill editing,github --file examples/snippets/github-lab.scala"))
+      assert(os.exists(directory / "editing.env"))
       assert(os.exists(directory / "github.env"))
     finally os.remove.all(directory)
   }
